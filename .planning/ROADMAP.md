@@ -33,17 +33,22 @@ Legend: **[done]** verified by a run · **[current]** in progress · **[ ]** not
 The seventeen phases are the roadmap. The ultra plan
 (`C:\Users\agust\.claude\plans\que-le-falta-para-whimsical-lemur.md`) reorders what comes
 after M1 around the observation that the remaining blockers were *decisions*, not work, and
-adds a P0 in front of M2 for them. Three of its four items are done; the fourth needs
-administrator rights on the build host and is the owner's.
+adds a P0 in front of M2 for them. **All four are now done**, and the fourth turned out not
+to need the administrator rights it was recorded as needing: the toolchain was already on
+the host, in MinGW-w64 form rather than MSVC.
 
 | Item | Deliverable | Gate | Status |
 |---|---|---|---|
 | **P0.1** | The product licence, declared and propagated | `Apache-2.0 OR MIT` in `[workspace.package]`, inherited by 22 crates, both texts at the root, ADR 0014, ADR 0005 amended, the audit's first question turned into a refusal | **[done]** |
 | **P0.2** | One edit is one undo step, and a refused edit changes nothing | `History::apply_group`, used by `Shell::dispatch`; grouped and ungrouped commands give the same state *and* document hash | **[done]** |
 | **P0.3** | Media that cannot be read is one condition with one policy | `MissingMedia` over every way media can be unavailable; a labelled `Placeholder` that says `offline`, `damaged` or `undecodable`, or a refused frame; the manifest's label comes from the resolver that would open it | **[done]** |
-| **P0.4** | The C toolchain | MSVC Build Tools installed, verified by a throwaway crate that links a `windows-sys` dependant and compiles a trivial C file | **[ ]** — needs administrator rights |
+| **P0.4** | The C toolchain | A throwaway crate links a `windows-sys` dependant, compiles a trivial C file through `cc`, and generates a `raw-dylib` import library; a control run with `dlltool` hidden from `PATH` reproduces the old failure. MinGW-w64 and `dlltool`, not MSVC — nothing to install | **[done]** |
+| **P0.4a** | The FFmpeg build, pinned | `docs/FFMPEG.md`: FFmpeg 9.0.2 `n9.0.2`, shared LGPL, `--disable-autodetect`, none of `--enable-gpl`/`--enable-nonfree`/`--enable-version3`, the LGPL-2.1 obligations mapped to clauses, and a runtime gate that refuses a library which cannot prove it is the LGPL build | **[done]** |
+| **P0.4b** | `maj-media`'s surface | `docs/MEDIA.md`: the vocabulary, the adapter at layer 4 because `PictureResolver` cannot be implemented at layer 2, a closed container enum because `kind` returns `&'static str`, no conversion in the decoder because that arithmetic is the certified path's, and the `unsafe` question named as an ADR rather than decided | **[done]** |
 
-Evidence is in `STATE.md`. P0.4 is what M2 is waiting on.
+Evidence is in `STATE.md`. What M2 is waiting on is now work plus one decision: the ADR
+that authorises `unsafe` in a leaf FFI crate (`docs/MEDIA.md` §8), and an FFmpeg build
+actually produced from the pinned configuration.
 
 ## Added: the MCP surface
 
@@ -74,8 +79,10 @@ project edited by keyboard and by tool calls has the same state hash and a diffe
 hash, because attribution is part of the trace.
 
 The window exists because of one measurement: `eframe` reaches `parking_lot_core`, which
-needs an import library, which needs `dlltool.exe`, which this host does not have. So the
-imports are declared by hand against the `libuser32.a`, `libgdi32.a` and `libkernel32.a` that
+needs an import library, which needs `dlltool.exe`, which this host did not have at the time.
+It does now (P0.4), so the toolkit question is reopened rather than closed — but reopening it
+means measuring `egui` against a native reference, which is the deferred decision M7 already
+owns, not an assumption that the window should change. So the imports are declared by hand against the `libuser32.a`, `libgdi32.a` and `libkernel32.a` that
 rustup ships — a probe created a window, showed it and pumped eighteen messages — and the
 result is a real application on this machine, Windows-only, in the one crate whose lint level
 for `unsafe` is not `forbid`. See ADR 0013 for the decision and its cost.
@@ -156,7 +163,7 @@ hardware-specific claims should be.
 
 | Decision | Owning phase | Criterion to decide |
 |---|---|---|
-| Binary `.maj` container | M10 | After the toolchain question in M2 is settled |
+| Binary `.maj` container | M10 | The toolchain precondition is met (P0.4), so this is now a real decision rather than a foregone one: a bundled SQLite is buildable today |
 | Cloud storage provider | M13 | Zero-egress cost first, because editors pull proxies constantly; must be S3-compatible to avoid lock-in |
 | Authentication | M13 | Device-code flow with OIDC; nothing earlier depends on it |
 | Interface toolkit beyond `egui` | M7 | Visual fidelity measured against a native reference |

@@ -20,8 +20,11 @@ determinism, the undo, the diff and the attribution are all fiction.
   Spanish), `prefs` (the file)
 
 The shell is deliberately **free of any windowing dependency**, and the window is a separate
-crate. That is not a taste: `eframe` cannot be built on this host, because every windowing
-crate on the shelf reaches `windows-sys`, whose import libraries need `dlltool`. So the part
+crate. That started as a necessity: `eframe` could not be built on this host when the shell
+was written, because every windowing crate on the shelf reaches `windows-sys`, whose import
+libraries need `dlltool` — absent then, present since P0.4, which reopens the toolkit
+question without settling it (see the amendment to ADR 0013). The separation is kept because
+it is the better shape regardless. So the part
 with the guarantees compiles, runs and is tested with no window in sight, and the window
 imports the seventy-six Win32 calls it needs by hand. See
 [ADR 0012](adr/0012-the-interface-emits-commands.md) and

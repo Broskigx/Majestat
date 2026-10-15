@@ -72,9 +72,153 @@ missing `.png` was built through `maj edit` and the agent's own `maj_place_clip`
 640×360, and the two frames read `NO DECODER` and `MEDIA OFFLINE` over the hazard field,
 with `"source": "undecodable"` and `"source": "offline"` in their manifests.
 
-**What P0 did not do.** The C toolchain is not installed — that needs administrator rights
-and is the owner's to run — so M2 is still blocked on the measurement below, and no decoder
-work has started. The plan is `C:\Users\agust\.claude\plans\que-le-falta-para-whimsical-lemur.md`.
+## P0.4: the C toolchain, measured — and it is already there
+
+**The blocker is gone, and not by the route that was planned.** P0.4 was recorded as
+needing administrator rights and an MSVC Build Tools install. It does not: this host now
+carries a **MinGW-w64 toolchain** (WinLibs, via winget) and binutils **`dlltool.exe`**, and
+those are the two things that were actually missing. MSVC was one way to obtain them, never
+the requirement. **Nothing needs to be installed and nothing needs administrator rights.**
+
+What the host has, measured:
+
+```
+link.exe        NOT FOUND          cl.exe       NOT FOUND       lib.exe   NOT FOUND
+vswhere.exe     NOT FOUND          no Visual Studio directory, no Windows Kits\10\bin
+dlltool.exe     C:\Users\agust\.cargo\bin\dlltool.exe
+                GNU dlltool (Binutils for MinGW-W64 x86_64, built by Brecht Sanders, r2)
+                2.47.20260726
+gcc.exe         ...\WinGet\Packages\BrechtSanders.WinLibs.POSIX.UCRT_...\mingw64\bin\gcc.exe
+ld.exe, ar.exe  same mingw64\bin
+rustup          default stable-x86_64-pc-windows-gnu; -msvc and -gnullvm also installed
+rustc           1.99.0 (b940084d7 2026-09-28), host x86_64-pc-windows-gnu
+```
+
+So MSVC is still absent and still cannot link, and that no longer matters.
+
+**The verification**, by two throwaway crates outside the repository, in the session
+scratchpad. The first links a `windows-sys` dependant and compiles a trivial C file through
+a `cc` build script — the exact gate P0.4 was written to require:
+
+```
+   Compiling windows_x86_64_gnu v0.52.6
+   Compiling find-msvc-tools v0.1.14
+   Compiling cc v1.8.0
+   Compiling windows-targets v0.52.6
+   Compiling windows-sys v0.59.0
+   Compiling p04-probe v0.0.0 (...\scratchpad\p04-probe)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 12.40s
+     Running `target\debug\p04-probe.exe`
+windows-sys GetTickCount64 = 18669265
+C file returned = 42
+=== exit code: 0 ===
+```
+
+That one is necessary and not sufficient: `windows-sys` 0.59 links the prebuilt import
+libraries the `windows_x86_64_gnu` crate ships, so it may not touch `dlltool` at all. The
+second crate tests what actually failed before — `parking_lot_core`, and a
+`#[link(kind = "raw-dylib")]` import, which is the mode that makes rustc generate an import
+library itself and is where `dlltool` is required on the GNU target:
+
+```
+   Compiling parking_lot_core v0.9.12
+   Compiling parking_lot v0.12.5
+   Compiling p04-probe2 v0.0.0 (...\scratchpad\p04-probe2)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 6.16s
+     Running `target\debug\p04-probe2.exe`
+parking_lot mutex = 7
+raw-dylib GetCurrentProcessId = 30748
+=== exit code: 0 ===
+```
+
+**And a control, because a passing test that cannot fail proves nothing.** The same crate,
+cleaned and rebuilt with `.cargo\bin` and the WinLibs `mingw64\bin` removed from `PATH`, so
+`dlltool` and `gcc` are invisible:
+
+```
+   Compiling parking_lot_core v0.9.12
+error: failed to add native library ...\target\debug\deps\rustcFdwqKC\kernel32.dll_imports.lib:
+       El sistema no puede encontrar el archivo especificado. (os error 2)
+error: could not compile `parking_lot_core` (lib) due to 1 previous error
+=== exit code: 101 ===
+```
+
+The probe is therefore sensitive to the condition it claims to test: hide `dlltool` and the
+old failure returns, restore it and the link succeeds. ADR 0009 carries an amendment saying
+which of its measured facts have expired and which clauses of its decision stand anyway —
+the seeded property tests and the three-dependency `maj-core` stand, because the toolchain
+was only ever their second reason.
+
+**What was built on top of it**, since the blocker is discharged:
+
+* **The FFmpeg build is pinned**, in `docs/FFMPEG.md`: FFmpeg 9.0.2 "Lei" (`n9.0.2`), a
+  shared LGPL build with `--disable-autodetect`, without `--enable-gpl`, `--enable-nonfree`
+  or `--enable-version3`, with `libpostproc` disabled explicitly and `swscale`/`swresample`
+  disabled for ADR 0006's reasons rather than licensing ones. It separates the
+  licence-mandatory flags from the determinism-motivated and the merely surface-minimising,
+  records the obligations against the clauses of LGPL-2.1 that create them, and turns
+  compliance into a **runtime gate**: `avutil_license()` must say LGPL, the loaded library's
+  own configuration string must contain none of the three refusals, and its hash must match
+  a manifest. A build that cannot prove it is the LGPL build is refused.
+* **`maj-media`'s surface is designed**, in `docs/MEDIA.md`, against the `PictureResolver`
+  seam as it actually is. Four findings came out of reading the signature rather than
+  assuming it: this crate **cannot** implement `PictureResolver`, because that trait is
+  layer 4 and the layering is downward-only, so the adapter lives in `maj-render`;
+  `kind`'s `&'static str` return forces the manifest's container vocabulary to be a closed
+  enum rather than a string from a library; `resolve(&self)` plus a stateful decoder forces
+  interior mutability and names the day `PictureResolver` gains `Send + Sync` as the day
+  that becomes a `Mutex`; and the decoder converts **nothing**, because YUV-to-RGB and the
+  transfer function are certified-path arithmetic and belong to `maj-color` — which is the
+  same decision as disabling swscale, and the two have to stay in step.
+* **The one thing M2 cannot start without is now a named decision, not a surprise**:
+  binding a C library needs `unsafe`, which `[workspace.lints.rust]` forbids outside
+  `maj-win32`. `docs/MEDIA.md` §8 sets out the three shapes, recommends a leaf FFI crate
+  with `maj-media` staying `forbid`, keeps out-of-process decoding available as a
+  `MediaBackend` implementation rather than a rewrite — and **does not decide it**, because
+  relaxing a workspace-wide `forbid` is an ADR of ADR 0013's weight.
+
+The plan is `C:\Users\agust\.claude\plans\que-le-falta-para-whimsical-lemur.md`.
+
+Gates after this work, on this machine:
+
+```
+cargo fmt --all -- --check                                  exit 0
+cargo clippy --workspace --all-targets -- -D warnings        exit 0   no warnings
+cargo test --workspace                                      exit 0   540 tests, 53 test targets
+cargo doc --workspace --no-deps                             exit 0   no warnings
+```
+
+This was documentation and design. The one code file given content
+(`crates/maj-media/src/lib.rs`) gained module documentation and kept its two constants and
+its one test. **No decoder code was written**, deliberately.
+
+**The count is 540 rather than the 539 above, and this work added no tests.** Another
+session was editing `maj-ui` and `maj-win32` in this same checkout while these gates ran, so
+the extra test is most likely theirs. The number is recorded as what was measured at a
+moment in a moving tree, not as a stable total — which is the honest form for it to take.
+
+Two red gates appeared during that window and neither was a defect in committed code, so
+both are recorded rather than quietly resolved:
+
+* **`clippy` failed on `constant SEAL_BGRA is never used`.** The cause was a stale `OUT_DIR`
+  copy of `maj-win32`'s generated `brand.rs` declaring a constant the current `build.rs` no
+  longer emits; `cargo clean -p maj-win32` regenerated it and the gate went green. The
+  latent hazard is worth hardening and is left to the crate's owner: `build.rs` declares
+  only `rerun-if-changed=assets/brand/logo.png`, so its generated output can outlive the
+  script that writes it, and `rerun-if-changed=build.rs` would make this class of failure
+  impossible.
+* **`doc` warned that `snapshot`'s public documentation linked to the crate-private
+  `App::refresh_preview`.** Fixed at the cause — the prose names it as code instead of
+  linking it — in one line of `crates/maj-win32/src/app.rs`, a file the other session was
+  also editing. Flagged rather than hidden, in case it collides with their work.
+
+And one failure that was seen once and **not** reproduced: `maj-cli`'s
+`edit_applies_a_command_and_the_render_follows` failed on `an edit must change the picture`
+during one workspace run, then passed 3/3 alone and 9/9 as part of its own binary across six
+runs. The scratch directories are per-test with unique names, so it is not a fixture
+collision; the likeliest explanation is the tree changing underneath the run. **The
+assertion was not weakened and the test was not "fixed"** — an unreproduced failure with a
+plausible external cause belongs in the record, and this is the first sighting.
 
 ## Position
 
@@ -427,25 +571,27 @@ owner's.
 
 ## Blockers
 
-**1. No C/C++ toolchain on the build host.** This blocks M2 and everything after it.
+**1. ~~No C/C++ toolchain on the build host.~~ Discharged, 2026-10-15.** A MinGW-w64
+toolchain and binutils `dlltool.exe` are present; a `windows-sys` dependant links, a C file
+compiles, and a `raw-dylib` import generates its import library. The control run — the same
+build with `dlltool` hidden from `PATH` — reproduces the old failure, so the result is a
+measurement and not an assumption. See P0.4 above and the amendment to ADR 0009.
 
-Measured facts: no Visual Studio or VS Build Tools, so the MSVC toolchain cannot link and
-`link.exe` is absent; no `cc`, `clang` or `gcc`; no binutils `dlltool.exe`, so crates
-that import Windows system libraries through `windows-sys` fail to build. The GNU
-toolchain does work, because rustup ships `rust-lld`.
+MSVC is still absent and still cannot link, and the project does not need it: the default
+target is `x86_64-pc-windows-gnu` and the C compiler is `gcc`. **Nothing needs to be
+installed.**
 
-Consequences already absorbed: `proptest` does not build (it pulls `windows-sys`), so the
-property tests use a seeded PRNG written in this workspace; `blake3` is used on its
-`pure` feature to avoid compiling C; and the `.maj` container is JSON-first because a
-bundled SQLite cannot be built. See ADR 0009.
+The consequences this blocker produced are kept on their own merits rather than reversed:
+the property tests keep the seeded PRNG because an unseeded harness would make a reported
+failure irreproducible, `blake3` keeps `pure` because a C-free graph is a smaller audit,
+and `maj-core` keeps three dependencies because that is what makes the licence statement
+checkable. ADR 0009's amendment says which clauses expired and which did not.
 
-Resolution, either of:
-* **Install Visual Studio Build Tools** — restores MSVC linking and the `windows-sys`
-  ecosystem. Requires administrator rights and a multi-gigabyte install.
-* **Install MSYS2 binutils and a mingw-w64 toolchain** — provides `dlltool.exe` and a C
-  compiler. Smaller, but keeps the GNU toolchain in place.
-
-Either unblocks M2. This is the single highest-priority decision on the project.
+**What M2 is now waiting on** is work rather than a blocker, plus one decision of its own:
+`unsafe` is forbidden outside `maj-win32` and binding a C library requires it, so
+`docs/MEDIA.md` §8 recommends a leaf FFI crate and an ADR to authorise it. That ADR and the
+FFmpeg build itself — configured per `docs/FFMPEG.md`, which does not exist as an artefact
+yet — are M2's first two steps.
 
 **2. ~~Product licence undecided.~~ Settled: `Apache-2.0 OR MIT`** (ADR 0014). What it
 leaves open is narrower and more concrete: the copyright holder's legal name, the pinned
@@ -456,7 +602,7 @@ excluded. See `docs/LICENSING.md`.
 
 | Phase | Blocked on |
 |---|---|
-| M2 Media I/O | The toolchain decision above, plus the corpus |
+| M2 Media I/O | The corpus, the ADR authorising `unsafe` in a leaf FFI crate, and an FFmpeg build produced per `docs/FFMPEG.md`. The toolchain is no longer among them |
 | M3 Playback | M2 |
 | M4 Render + GPU | M3 (`wgpu` is deliberately not a dependency yet) |
 | M7 Interface — the three-minute edit itself | Nothing mechanical. The shell, the window, the pointer and the clock are built and gated; the gate needs a person to sit down and perform it, and M6's editorial operations |
@@ -464,21 +610,30 @@ excluded. See `docs/LICENSING.md`.
 
 ## Next action
 
-1. **Install the MSVC Build Tools** — the owner's, because it needs administrator rights —
-   then verify with a throwaway crate that links a `windows-sys`-dependent library and
-   compiles a trivial C file. This is the one remaining thing in P0 and it blocks M2 and
-   everything after it.
-2. Pin the FFmpeg configuration: an LGPL shared build, no `--enable-gpl`, no
-   `--enable-nonfree`, exact version recorded, with the notice and corresponding-source
-   obligations written down before any code links it.
-3. Perform M7's gate: a three-minute edit, end to end, by keyboard and pointer, with the
+1. **~~Install the MSVC Build Tools.~~ Not needed, and P0 is complete.** The toolchain was
+   already there in MinGW-w64 form; the verification and its control run are under P0.4
+   above.
+2. **~~Pin the FFmpeg configuration.~~ Done**: `docs/FFMPEG.md`. What remains is not a
+   decision but an artefact — *produce* that build, under MSYS2 or a MinGW shell, and fill
+   `third-party/ffmpeg/MANIFEST.toml` with the hashes the build itself reports. One item in
+   it is not an engineering task and is the owner's: the EULA needs an explicit
+   reverse-engineering-for-debugging carve-out, which LGPL-2.1 §6 requires and no code can
+   supply.
+3. **Write the ADR that authorises `unsafe` in a leaf FFI crate** (`docs/MEDIA.md` §8). It
+   is the one thing M2 cannot start without, it relaxes a workspace-wide `forbid`, and it
+   is deliberately not decided inside a design document.
+4. Perform M7's gate: a three-minute edit, end to end, by keyboard and pointer, with the
    agent's tools used for at least one step of it — and record what it felt like, because
    that is the measurement that phase is waiting on.
-4. Curate a starter corpus of twenty synthetic files covering the M2 axes, so the
+5. Curate a starter corpus of twenty synthetic files covering the M2 axes, so the
    hundred-file gate has somewhere to grow from.
-5. Begin M2: `maj-media`'s stream discovery and probe path first, behind the
-   `PictureResolver` seam that already exists, with the hardware decode bridge prototyped
-   and measured before it is promised.
+6. Begin M2 in the order `docs/MEDIA.md` §9 sets out: the vocabulary first, with no backend
+   behind it, so the layering and the closed `kind` vocabulary are provable before a
+   decoder exists; then probe over the corpus, which is most of M2's gate and needs no
+   frames at all; then the `MediaResolver` adapter in `maj-render`, which is the moment the
+   viewer stops being empty. Hardware decode is capability-tested and measured last, and it
+   is Tier 1 only — a certified render decodes in software, because a driver's output cannot
+   be part of a claim that the same log produces the same bytes.
 
 ## Deliberate technical debts, recorded
 

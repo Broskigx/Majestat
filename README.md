@@ -45,10 +45,12 @@ cargo run -p maj-win32 --bin majestat
 ```
 
 What is not here yet: reading or decoding media files, audio, video encoding, and a playback
-engine behind the transport clock — the window is keyboard-first, and the toolkit the
-cross-platform story wants
-(`egui`) still does not build on a host with no C toolchain, which is why the window declares
-its Win32 imports by hand ([ADR 0013](docs/adr/0013-the-window-is-written-against-win32.md)).
+engine behind the transport clock — the window is keyboard-first, and it declares its Win32
+imports by hand because the toolkit the cross-platform story wants (`egui`) could not be
+built on this host when the window was written
+([ADR 0013](docs/adr/0013-the-window-is-written-against-win32.md)). That constraint has
+since lifted: a C toolchain and `dlltool` are present as of P0.4, so the toolkit question
+is open again and is a measurement nobody has taken rather than a settled impossibility.
 Media that cannot be decoded cannot be rendered, and the renderer says so rather than
 inventing pixels: a clip whose picture is not available — a movie this build has no decoder
 for, a still that has moved, a file whose bytes are wrong — draws a labelled placeholder
@@ -101,6 +103,14 @@ testdata/         the media corpus description (files are not committed)
   its load gates and its compatibility rules.
 * [`docs/LICENSING.md`](docs/LICENSING.md) — the `Apache-2.0 OR MIT` decision, what it
   forecloses, the dependency audit, and the gate a new dependency has to pass.
+* [`docs/FFMPEG.md`](docs/FFMPEG.md) — the pinned FFmpeg build: the exact version, the
+  configuration with its licence-mandatory flags separated from the rest, the LGPL-2.1
+  obligations against the clauses that create them, and the runtime gate that refuses a
+  library which cannot prove it is the LGPL build.
+* [`docs/MEDIA.md`](docs/MEDIA.md) — `maj-media`'s surface, designed against the
+  `PictureResolver` seam: the probe and decode vocabulary, why the adapter lives at layer 4,
+  what the decoder deliberately does not convert, and the one decision M2 cannot start
+  without.
 * [`docs/COVERAGE.md`](docs/COVERAGE.md) — the Fase II catalogue audited against what the
   engine actually does: 130 items, 33 reachable today, and what to build in what order.
 * [`docs/MCP.md`](docs/MCP.md) — the agent's door into the editor: forty-five tools, five

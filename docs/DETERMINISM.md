@@ -98,6 +98,31 @@ Hashes are BLAKE3 over the compact canonical JSON, hex encoded.
   history that might not be exact.
 * **Non-certified render paths.** Hardware-specific fast paths are outside Tier 2 until
   they declare a manifest.
+* **Hardware decode.** When M2 lands, a hardware-decoded frame depends on a driver and a
+  GPU, so it is **Tier 1 only and never certified**: export and `--verify` decode in
+  software, playback may not, and the manifest says which it was. Same rule as any other
+  opportunistic path, applied to the decoder — see `docs/MEDIA.md` §6.
+
+## What a decoder will add to the claim
+
+Today "the same log and the same media produce the same bytes" needs no qualification,
+because the only media the engine reads are PNG and PPM stills inflated in pure Rust. A
+decoder changes that, and it is worth stating before it arrives rather than after:
+
+**The decoder becomes part of the hashed inputs.** Two FFmpeg versions can both be correct
+and produce different pixels from the same H.264 file, so `DecoderIdentity` — backend, exact
+version, and a hash of the library's own configuration string — is recorded in the render
+manifest and is part of every cache key (`docs/MEDIA.md` §4). A render is reproducible
+*against a named decoder*, and the name is in the manifest rather than implied by the
+machine. This is why `docs/FFMPEG.md` pins one version and refuses a library whose hash is
+not the pinned one: the pin is what makes the determinism claim survive an upgrade instead
+of silently changing meaning.
+
+Two consequences follow, and both are deliberate: pixel-format conversion and audio
+resampling are done in this workspace rather than by swscale and swresample, whose results
+are stable for a build and not across builds; and a decoder upgrade is a **declared break**
+in Tier 1 equality for footage it touches, announced as such rather than discovered when a
+`--verify` fails.
 
 ## The gates that hold this today
 

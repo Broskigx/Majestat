@@ -112,3 +112,34 @@ the Win32 API, with the imports declared by hand.**
   and agent alone is something a person can now perform on this machine, and the self-check
   runs the same operations mechanically. The gate is still not recorded as *met*: nobody has
   sat down and done it, and the engine's editorial operations (M6) are not all here yet.
+
+## Amendment, 2026-10-15: the premise expired, the decision stands
+
+The Context above says "the toolchain has not changed: `dlltool` is still missing, there is
+still no C compiler and still no MSVC". Two thirds of that is **no longer true**. P0.4
+measured a MinGW-w64 `gcc` and binutils `dlltool` on this host, and a probe crate that
+links `parking_lot_core` and a `raw-dylib` import now builds and runs (`.planning/STATE.md`,
+P0.4). Only "no MSVC" survives, and MSVC was never what was needed.
+
+So option 1 of the three — *wait* — is no longer indefinitely long, and option 2 no longer
+requires anything of the owner's machine. **The decision is kept anyway**, for reasons that
+were in it from the start and did not depend on the toolchain:
+
+* `maj-win32` is a **presenter**, not the interface. `maj-ui` holds the guarantees and is
+  tested without a window, and a presenter for another platform is a sibling crate rather
+  than a change to this one. That shape is worth more than the hand-written imports cost.
+* The imports work, are gated, and are confined to the one crate whose lint level for
+  `unsafe` is not `forbid`. Replacing working, measured code because a dependency became
+  installable is not an improvement.
+* Whether `egui` is the right toolkit was **always a separate question** from whether it
+  would build. `.planning/ROADMAP.md` already lists "interface toolkit beyond `egui`" as a
+  deferred decision owned by M7, with the criterion "visual fidelity measured against a
+  native reference". That criterion is now testable and has not been tested.
+
+What changes is therefore the status of a question, not of a decision: the toolkit choice
+moves from *foreclosed by the host* to *open and unmeasured*. Nothing should be rewritten on
+the strength of this amendment; something should be measured.
+
+One thing this amendment does not reopen: `unsafe` in `maj-win32`. A toolkit crate would
+contain the same `unsafe` at the same boundary, with less of it visible. The relevant
+pending question about `unsafe` is M2's, and it is in `docs/MEDIA.md` §8.

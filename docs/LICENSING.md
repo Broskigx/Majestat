@@ -76,8 +76,16 @@ a test framework, and why `maj-time` has no dependencies at all.
 
 * **The copyright holder's legal name**, in `authors` and in `LICENSE-MIT`. Currently
   "Majestat", which is a project name and not an entity.
-* **FFmpeg build configuration.** LGPL build, dynamic linking, notices, and the
-  corresponding-source offer. `docs/adr/0005-ffmpeg-lgpl-behind-an-owned-abstraction.md`.
+* **~~FFmpeg build configuration.~~ Pinned: [`docs/FFMPEG.md`](FFMPEG.md).** FFmpeg 9.0.2
+  (`n9.0.2`), shared LGPL build, `--disable-autodetect`, and none of `--enable-gpl`,
+  `--enable-nonfree` or `--enable-version3`; the obligations are mapped to the LGPL-2.1
+  clauses that create them, and the compliance claim is a runtime gate — `avutil_license()`
+  must say LGPL and the loaded library's own configuration string must contain no refusal,
+  or `maj-media` refuses to initialise. Two items in it are **not** engineering tasks and
+  remain the owner's: the EULA needs the reverse-engineering-for-debugging carve-out §6
+  requires, and the written source offer needs the legal name below.
+  `docs/adr/0005-ffmpeg-lgpl-behind-an-owned-abstraction.md` is the decision; `docs/FFMPEG.md`
+  is the configuration.
 * **Codec patent pools.** H.264 and HEVC distribution and encoding are separate from
   copyright licensing and depend on jurisdiction, and the permissive product licence does
   nothing to resolve them. AV1 is the royalty-free path and is the default preference

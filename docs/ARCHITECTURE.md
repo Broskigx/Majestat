@@ -83,9 +83,11 @@ scripting surface. All four drive the same command API as the agent does.
 `maj-ui` is the shell as a **model**: 77 intentions, a keyboard table, seven pages, two
 languages and a preference file, all of which translate into the same commands an agent's
 tools append. It
-carries no windowing dependency at all, deliberately: the toolkit does not build on a host
-with no C toolchain, and the part with the guarantees was written so that it compiles and is
-tested anyway.
+carries no windowing dependency at all, deliberately: the toolkit could not be built on this
+host when the shell was written, and the part with the guarantees was written so that it
+compiles and is tested anyway. The toolchain constraint has since lifted (P0.4 in
+`.planning/STATE.md`), and the separation is kept on its own merits — a shell that is a
+model is testable without a window, and a presenter for another platform is a sibling crate.
 
 `maj-win32` is that shell in a window, and it is the **one crate in the workspace whose lint
 level for `unsafe_code` is not `forbid`**, because the Win32 imports are declared by hand: it

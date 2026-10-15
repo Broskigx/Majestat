@@ -55,9 +55,11 @@ Strengths borrowed deliberately, from the competition's own products:
 
 ## Constraints
 
-* **Host toolchain.** Windows, Rust 1.99, GNU toolchain (no Visual Studio installed), no
-  C compiler, no binutils `dlltool`. This constrains dependencies sharply and blocks M2
-  until resolved. See ADR 0009 and `.planning/STATE.md` for the blocker.
+* **Host toolchain.** Windows, Rust 1.99, GNU toolchain (**no Visual Studio installed**, so
+  no `link.exe` and no MSVC linking), with a MinGW-w64 `gcc` and binutils `dlltool` present
+  since P0.4. A C dependency can therefore be built, and M2 is no longer blocked on the
+  toolchain. The narrow dependency set is kept as a deliberate policy rather than a
+  constraint — see the amendment to ADR 0009 and P0.4 in `.planning/STATE.md`.
 * **Licence hygiene.** The product is `Apache-2.0 OR MIT`, so no GPL component may be
   linked in: `x264` and `x265` are excluded, LGPL dependencies are dynamic and behind an
   abstraction this workspace owns, and vendor SDKs stay behind feature flags.
