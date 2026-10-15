@@ -1,0 +1,63 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  quality:
+    name: quality (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      # Warnings are errors: the whole point of layer 0 and layer 1 is that they are
+      # small enough to hold to that standard.
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace
+
+      - name: Documentation builds
+        run: cargo doc --workspace --no-deps
+
+  # The M1 acceptance gate, stated as its own job so a regression is unambiguous.
+  determinism-gate:
+    name: determinism gate (release)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Release flips the fuzz budget from 2,000 to 10,000 commands and enables the
+      # full trace walk. See crates/maj-core/tests/support/mod.rs.
+      - name: Ten-thousand-command fuzz with exhaustive undo and redo
+        run: cargo test --release -p maj-core --test properties --test roundtrip
+
+      - name: Layer 0 property tests
+        run: cargo test --release -p maj-time

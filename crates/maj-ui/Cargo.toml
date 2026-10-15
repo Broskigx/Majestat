@@ -1,0 +1,42 @@
+[package]
+name = "maj-ui"
+description = "Majestat layer 6: the shell, which turns intentions into commands and nothing else."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+maj-time.workspace = true
+maj-core.workspace = true
+maj-color.workspace = true
+maj-render.workspace = true
+maj-export.workspace = true
+maj-mcp.workspace = true
+maj-agent.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+# `eframe` is deliberately absent, and that is a measurement rather than a preference.
+#
+# The window needs it, and the window cannot be built on this host: the probe in
+# `target/probe/eframe` reaches `parking_lot_core`, whose `windows-sys` dependency makes
+# rustc build a Windows import library, and that needs `dlltool`, which needs an assembler.
+# rustup's bundled gnu toolchain ships a linker-only `gcc`, no assembler exists on the
+# machine, and neither does MSVC, LLVM or MSYS2. The probe's own output is the evidence —
+# `error calling dlltool 'dlltool.exe': program not found`, `PROBE_BUILD_EXIT=101`, kept in
+# its `build.log` — and it is recorded where it outlives the ignored directory: ADR 0012,
+# `docs/UI.md` and `.planning/STATE.md`. See also `docs/adr/0009`.
+#
+# Everything in this crate — the session, the intentions, the keyboard, the preferences and
+# the two languages — is deliberately free of any windowing dependency *because of that*:
+# the part with the guarantees is the part that compiles here, and the widgets are the thin
+# layer that will be added when the toolchain allows it.
+
+[dev-dependencies]
+maj-time.workspace = true
+maj-core.workspace = true

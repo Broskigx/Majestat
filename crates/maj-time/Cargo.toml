@@ -1,0 +1,19 @@
+[package]
+name = "maj-time"
+description = "Majestat layer 0: rational time, timecode, frame addressing and retime maps."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true, optional = true }
+
+[features]
+# Off by default: layer 0 stays dependency-free unless a persistence layer needs it.
+# `maj-core` enables this to store rates, ranges and rationals in a `.maj` document.
+serde = ["dep:serde"]

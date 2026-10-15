@@ -1,0 +1,50 @@
+[package]
+name = "maj-win32"
+description = "Majestat layer 6: the Win32 presenter — a window for the shell, and nothing else."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# The application, named after the product rather than after the crate: `maj-ui` would be the
+# same output filename as the `maj-ui` library, and `maj` is already the command line.
+[[bin]]
+name = "majestat"
+path = "src/main.rs"
+
+[lints.rust]
+# The workspace forbids `unsafe_code`, and that stays the rule for the other twenty-one
+# crates. This one is the platform edge: a window is a raw foreign-function boundary, and
+# there is no version of it that is not. The level is `deny` rather than `forbid` so that the
+# single module that declares the Win32 imports may carry an explicit `allow` with its
+# reasons attached; `forbid` cannot be overridden anywhere, which would make the exception
+# invisible instead of documented. CI's `-D warnings` still turns any *other* `unsafe` in
+# this crate into an error, and `docs/adr/0013` records the decision and its cost.
+unsafe_code = "deny"
+missing_docs = "warn"
+unreachable_pub = "warn"
+missing_debug_implementations = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+dbg_macro = "warn"
+todo = "warn"
+unimplemented = "warn"
+
+[dependencies]
+maj-time.workspace = true
+maj-core.workspace = true
+maj-color.workspace = true
+maj-render.workspace = true
+maj-mcp.workspace = true
+maj-ui.workspace = true
+
+[dev-dependencies]
+maj-time.workspace = true
+maj-core.workspace = true
+
+[build-dependencies]
+# Inflates the logo at build time. Declared once in the workspace manifest, so the licence
+# audit stays a single file: see docs/LICENSING.md.
+miniz_oxide.workspace = true

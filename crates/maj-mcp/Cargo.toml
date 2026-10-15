@@ -1,0 +1,30 @@
+[package]
+name = "maj-mcp"
+description = "Majestat layer 5: the Model Context Protocol server that exposes the command surface to an AI editor."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "maj-mcp"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+maj-time.workspace = true
+maj-core.workspace = true
+maj-color.workspace = true
+maj-render.workspace = true
+maj-export.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+maj-time.workspace = true
+maj-core.workspace = true
+maj-render.workspace = true
+maj-export.workspace = true

@@ -1,0 +1,105 @@
+# Majestat — Cargo workspace
+#
+# Layer rule (see docs/ARCHITECTURE.md): dependencies point DOWNWARD only.
+# A crate may depend on crates in lower layers, never on crates above it.
+# The UI never touches media I/O directly; it emits commands.
+
+[workspace]
+resolver = "2"
+members = [
+    # Layer 0 — pure time
+    "crates/maj-time",
+    # Layer 1 — authoritative project model
+    "crates/maj-core",
+    # Layer 2 — I/O and caching
+    "crates/maj-media",
+    "crates/maj-cache",
+    # Layer 3 — render graph, color, GPU
+    "crates/maj-graph",
+    "crates/maj-color",
+    "crates/maj-gpu",
+    # Layer 4 — realtime and offline execution
+    "crates/maj-audio",
+    "crates/maj-playback",
+    "crates/maj-render",
+    # Layer 5 — ecosystem and differentiation
+    "crates/maj-timeline",
+    "crates/maj-export",
+    "crates/maj-ai",
+    "crates/maj-agent",
+    "crates/maj-mcp",
+    "crates/maj-collab",
+    "crates/maj-cloud",
+    "crates/maj-plugins",
+    # Layer 6 — applications and automation
+    "crates/maj-ui",
+    "crates/maj-win32",
+    "crates/maj-cli",
+    "crates/maj-script",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.85"
+authors = ["Majestat"]
+# The product licence is Apache-2.0 OR MIT: the recipient picks either. See
+# docs/LICENSING.md for what that forecloses — no GPL component may enter the shipping
+# binary, and FFmpeg is admissible only as an LGPL build, dynamically linked (ADR 0005).
+license = "Apache-2.0 OR MIT"
+# Still unpublished: the licence decides the terms, not the release.
+publish = false
+
+[workspace.dependencies]
+# Only dependencies verified to build on this toolchain are listed.
+# See docs/adr/0009-toolchain-and-dependency-policy.md for the constraint that
+# produced this list (no C toolchain / no binutils `dlltool` on the host).
+#
+# `miniz_oxide` is the one dependency here that is not `serde` or `blake3`: it is pure Rust,
+# it has no C in it, and it is what lets the renderer inflate a PNG without a codec library.
+# It is audited in `docs/LICENSING.md` like everything else.
+miniz_oxide = { version = "0.8", default-features = false, features = ["with-alloc"] }
+maj-time = { path = "crates/maj-time" }
+maj-core = { path = "crates/maj-core" }
+maj-media = { path = "crates/maj-media" }
+maj-cache = { path = "crates/maj-cache" }
+maj-graph = { path = "crates/maj-graph" }
+maj-color = { path = "crates/maj-color" }
+maj-gpu = { path = "crates/maj-gpu" }
+maj-audio = { path = "crates/maj-audio" }
+maj-playback = { path = "crates/maj-playback" }
+maj-render = { path = "crates/maj-render" }
+maj-timeline = { path = "crates/maj-timeline" }
+maj-export = { path = "crates/maj-export" }
+maj-ai = { path = "crates/maj-ai" }
+maj-agent = { path = "crates/maj-agent" }
+maj-mcp = { path = "crates/maj-mcp" }
+maj-collab = { path = "crates/maj-collab" }
+maj-cloud = { path = "crates/maj-cloud" }
+maj-plugins = { path = "crates/maj-plugins" }
+maj-ui = { path = "crates/maj-ui" }
+maj-win32 = { path = "crates/maj-win32" }
+maj-script = { path = "crates/maj-script" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+blake3 = { version = "1", default-features = false, features = ["pure"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+unreachable_pub = "warn"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+dbg_macro = "warn"
+todo = "warn"
+unimplemented = "warn"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+# Benchmarks must be optimised even in debug builds.
+[profile.bench]
+inherits = "release"

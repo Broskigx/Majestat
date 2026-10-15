@@ -1,0 +1,23 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# Majestat local state
+*.maj.bak
+.maj-cache/
+.maj-render/
+
+# Media corpus is referenced, not committed (see testdata/media-corpus/README.md)
+testdata/media-corpus/media/
+testdata/media-corpus/proxies/
+
+# Editors / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Freebuff thread state
+.freebuff/

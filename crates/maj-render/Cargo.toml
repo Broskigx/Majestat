@@ -1,0 +1,24 @@
+[package]
+name = "maj-render"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+maj-time.workspace = true
+maj-core.workspace = true
+maj-color.workspace = true
+maj-graph.workspace = true
+maj-playback.workspace = true
+serde.workspace = true
+# Inflates a PNG's image data. Pure Rust: see the workspace manifest and docs/LICENSING.md.
+miniz_oxide.workspace = true
+
+[dev-dependencies]
+maj-time.workspace = true
+maj-core.workspace = true

@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-labelledby="title">
+  <title id="title">Majestat</title>
+  <!--
+    The emblem is one sword and one crown on a shared centre line: the blade rises, the crown
+    rests where the blade meets the guard, and the tip disappears behind the crown. One
+    device rather than a jumble of them, because a mark has to read at sixteen pixels.
+
+    The sword is drawn first so the crown covers it, and every transform is a scale or a
+    translation about a named point, so the composition can be recomposed by arithmetic.
+  -->
+  <g transform="translate(256 287) scale(0.58) translate(-256 -287)">
+    <g fill="#9AA4B2">
+      <path d="M256 84 L284 292 L284 340 L228 340 L228 292 Z"/>
+      <rect x="156" y="339" width="200" height="34" rx="10"/>
+      <rect x="240" y="373" width="32" height="79" rx="6"/>
+      <circle cx="256" cy="468" r="22"/>
+    </g>
+    <path d="M252 96 L260 96 L260 336 L252 336 Z" fill="#E4E9F0"/>
+    <rect x="156" y="339" width="200" height="7" rx="3.5" fill="#E4E9F0"/>
+  </g>
+  <g transform="translate(256 170) scale(0.55) translate(-256 -250)">
+    <g fill="#E8B44A">
+      <path d="M96 336 L112 150 L148 250 L184 130 L220 250 L256 118 L292 250 L328 130 L364 250 L400 150 L416 336 Z"/>
+      <rect x="88" y="336" width="336" height="48" rx="10"/>
+    </g>
+    <g fill="#B8871F">
+      <circle cx="112" cy="150" r="13"/>
+      <circle cx="184" cy="130" r="11"/>
+      <circle cx="256" cy="118" r="15"/>
+      <circle cx="328" cy="130" r="11"/>
+      <circle cx="400" cy="150" r="13"/>
+    </g>
+    <rect x="88" y="336" width="336" height="8" rx="4" fill="#F2CB74"/>
+  </g>
+</svg>
