@@ -529,7 +529,7 @@ pub const fn en(key: Key) -> &'static str {
         Key::PaletteEmpty => "Nothing matches",
         Key::AudioNotBuilt => "No audio engine yet: sound is M9, and this panel is not pretending.",
         Key::MediaUndecoded => {
-            "This build decodes stills only. Media it cannot read renders as a labelled chart: that is M2."
+            "This build decodes stills only. Media it cannot read draws a labelled placeholder — offline, damaged or undecodable — and the manifest says which: that is M2."
         }
         Key::PlaybackNotBuilt => {
             "There is no playback engine yet, so there is no play button: that is M3."
@@ -755,8 +755,9 @@ pub const fn es(key: Key) -> &'static str {
             "Todavía no hay motor de audio: el sonido es M9, y este panel no lo finge."
         }
         Key::MediaUndecoded => {
-            "Esta compilación solo decodifica imágenes fijas. Lo que no puede leer se dibuja \
-             como carta etiquetada: eso es M2."
+            "Esta compilación solo decodifica imágenes fijas. Lo que no puede leer dibuja un \
+             marcador etiquetado — sin conexión, dañado o sin decodificador — y el manifiesto \
+             dice cuál: eso es M2."
         }
         Key::PlaybackNotBuilt => {
             "Todavía no hay motor de reproducción, así que no hay botón de reproducir: eso es M3."

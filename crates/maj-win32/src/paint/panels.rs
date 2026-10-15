@@ -5,7 +5,7 @@
 //! does and what keeps the chrome thin.
 
 use maj_core::{EffectKind, TransitionKind};
-use maj_render::{TitleAlign, TitleFace};
+use maj_render::{PictureResolver, TitleAlign, TitleFace};
 use maj_ui::{AnimChannel, Key, text};
 
 use crate::app::App;
@@ -220,14 +220,62 @@ pub(crate) fn right_column(hdc: Hdc, rect: Rect, app: &mut App) {
     }
 }
 
+/// The resolver the pool asks about a URI, which is the one the renderer uses.
+///
+/// Asking it rather than matching on the extension here is what keeps the pool's word and the
+/// render manifest's word the same word.
+const RESOLVER: maj_render::WorkspaceResolver = maj_render::WorkspaceResolver::new();
+
+/// Kinds a tile can draw for itself: the pictures the engine builds out of the URI, with no
+/// file behind them.
+///
+/// A still on disk is deliberately absent. Drawing one means decoding it, and decoding it on
+/// every paint of every tile is engine work on the path that is supposed to be pixels — the
+/// same reason the viewer renders from the message loop and not from `draw`. When the cache
+/// exists (M10) this is the list that grows.
+const DRAWABLE: [&str; 3] = ["solid", "generated", "title"];
+
+/// A tile-sized picture of a URI, or `None` when drawing one would cost a file read.
+///
+/// The samples come from the same [`maj_render::PictureSource`] the renderer would use, so a
+/// tile is a small version of what the viewer shows rather than a second idea of it. Code
+/// values are what a screen wants, and the source hands back scene-linear light, so each
+/// sample goes through the same transfer the viewer encodes with.
+fn thumbnail(uri: &str, width: u32, height: u32) -> Option<Vec<u8>> {
+    if !DRAWABLE.contains(&RESOLVER.kind(uri)) {
+        return None;
+    }
+    let source = RESOLVER.resolve(uri, (width, height), 0).ok()?;
+    let (source_w, source_h) = (f32::from(source.width() as u16), source.height() as f32);
+    let mut pixels = Vec::with_capacity((width * height * 4) as usize);
+    for row in 0..height {
+        for column in 0..width {
+            // Sample at the centre of each tile pixel, mapped across the source.
+            let x = (column as f32 + 0.5) / width as f32 * source_w;
+            let y = (row as f32 + 0.5) / height as f32 * source_h;
+            let pixel = source.sample(x, y);
+            let code = |channel: f32| -> u8 {
+                maj_color::TransferFunction::Srgb
+                    .encode(f64::from(channel.clamp(0.0, 1.0)))
+                    .mul_add(255.0, 0.5) as u8
+            };
+            // BGRA, top-down.
+            pixels.push(code(pixel[2]));
+            pixels.push(code(pixel[1]));
+            pixels.push(code(pixel[0]));
+            pixels.push(255);
+        }
+    }
+    Some(pixels)
+}
+
 /// The media pool: one tile per asset, with the honest note about decoding.
 pub(crate) fn pool_body(hdc: Hdc, rect: Rect, app: &mut App) {
     if rect.is_empty() {
         return;
     }
-    let theme = &app.theme;
-    let m = theme.metrics;
-    let assets: Vec<(String, String, bool, maj_core::MediaAssetId)> = app
+    let m = app.theme.metrics;
+    let assets: Vec<(String, String, bool, maj_core::MediaAssetId, String)> = app
         .shell
         .project()
         .assets()
@@ -238,9 +286,26 @@ pub(crate) fn pool_body(hdc: Hdc, rect: Rect, app: &mut App) {
                 format!("{}f · {}", asset.duration_frames(), asset.timebase()),
                 asset.has_video(),
                 asset.id(),
+                asset.uri().to_owned(),
             )
         })
         .collect();
+
+    // Every tile's well is the same size, so the thumbnails are made — or found already made
+    // — once, before the paint starts and before the theme is borrowed. Sampling one costs a
+    // deterministic transfer per channel per pixel, which is a fine price to pay once and an
+    // impossible one to pay on every paint: see `App::thumbnails`.
+    let well_size = (
+        (m.tile_w - 2 * m.px(3)).max(1) as u32,
+        (m.tile_h - m.px(24) - m.px(3)).max(1) as u32,
+    );
+    for (_, _, _, _, uri) in &assets {
+        app.thumbnails
+            .entry((uri.clone(), well_size.0, well_size.1))
+            .or_insert_with(|| thumbnail(uri, well_size.0, well_size.1));
+    }
+
+    let theme = &app.theme;
     let selected = app.shell.media_selection();
     // The grid stops above the footer: the button that brings a picture in from disk and the
     // note that says what this build decodes are not things a tile may grow into.
@@ -251,7 +316,7 @@ pub(crate) fn pool_body(hdc: Hdc, rect: Rect, app: &mut App) {
         (rect.bottom - m.px(62)).max(rect.top),
     );
     let columns = ((grid.width() - m.pad) / (m.tile_w + m.pad)).max(1);
-    for (index, (name, detail, has_video, id)) in assets.iter().enumerate() {
+    for (index, (name, detail, has_video, id, uri)) in assets.iter().enumerate() {
         let column = index as i32 % columns;
         let line = index as i32 / columns;
         let left = grid.left + m.pad + column * (m.tile_w + m.pad);
@@ -281,33 +346,52 @@ pub(crate) fn pool_body(hdc: Hdc, rect: Rect, app: &mut App) {
             tile.bottom - m.px(24),
         );
         win32::fill_colour(hdc, well, theme.well);
-        // There is no decoder until M2, so a tile shows the picture it *is* rather than a
-        // picture pretending to be a frame: the kind of media, and which phase reads it.
-        let picture = if *has_video { Glyph::Film } else { Glyph::Wave };
-        glyphs::draw(
-            hdc,
-            Rect::new(
-                well.left + well.width() / 3,
-                well.top + well.height() / 5,
-                well.right - well.width() / 3,
-                well.bottom - well.height() / 5,
-            ),
-            picture,
-            theme.border,
-        );
-        win32::text(
-            hdc,
-            Rect::new(
-                well.left,
-                well.bottom - m.px(14),
-                well.right,
-                well.bottom - m.px(2),
-            ),
-            text(app.shell.lang(), Key::MediaUndecodedShort),
-            theme.faint,
-            &theme.small_font,
-            Align::Centre,
-        );
+        // A tile shows the picture it *is*. For the forms the engine builds from the URI
+        // itself — a flat field, a chart, a title — that is a real thumbnail, made once above.
+        // For anything else it is the kind of media and the word the engine itself would put
+        // in a render manifest, so the pool cannot claim "not decoded" about a still it reads
+        // perfectly well. A thumbnail of a file on disk would mean decoding it; that waits
+        // for the cache (M10).
+        match app
+            .thumbnails
+            .get(&(uri.clone(), well_size.0, well_size.1))
+            .and_then(Option::as_ref)
+        {
+            Some(pixels) => win32::blit_smooth(hdc, well, well_size.0, well_size.1, pixels),
+            None => {
+                let picture = if *has_video { Glyph::Film } else { Glyph::Wave };
+                glyphs::draw(
+                    hdc,
+                    Rect::new(
+                        well.left + well.width() / 3,
+                        well.top + well.height() / 5,
+                        well.right - well.width() / 3,
+                        well.bottom - well.height() / 5,
+                    ),
+                    picture,
+                    theme.border,
+                );
+                let kind = RESOLVER.kind(uri);
+                let label = if kind == maj_render::Placeholder::UNDECODABLE {
+                    text(app.shell.lang(), Key::MediaUndecodedShort)
+                } else {
+                    kind
+                };
+                win32::text(
+                    hdc,
+                    Rect::new(
+                        well.left,
+                        well.bottom - m.px(14),
+                        well.right,
+                        well.bottom - m.px(2),
+                    ),
+                    label,
+                    theme.faint,
+                    &theme.small_font,
+                    Align::Centre,
+                );
+            }
+        }
         win32::text(
             hdc,
             Rect::new(
@@ -1273,6 +1357,69 @@ pub(crate) fn deliver_page(hdc: Hdc, frame: &Frame, app: &mut App) {
             last,
             theme.dim,
             &theme.small_font,
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_pool_draws_what_it_can_and_names_what_it_cannot() {
+        // The tile used to say "not decoded (M2)" about everything, including the flat fields
+        // and charts the engine builds out of the URI and draws perfectly well. A pool that
+        // calls a picture undecodable is a pool nobody can believe about the one that really
+        // is, so the two answers are pinned here against the resolver that decides them.
+        for uri in [
+            "solid:11,24,30",
+            "generated:bars",
+            "title:sans:24:ffffff:centre:HI",
+        ] {
+            let drawn = thumbnail(uri, 24, 16).unwrap_or_else(|| panic!("{uri} is drawable"));
+            assert_eq!(drawn.len(), 24 * 16 * 4, "{uri}");
+            assert!(
+                drawn.chunks_exact(4).all(|pixel| pixel[3] == 255),
+                "a tile is opaque: {uri}"
+            );
+            assert_ne!(
+                RESOLVER.kind(uri),
+                maj_render::Placeholder::UNDECODABLE,
+                "{uri} must not be called undecodable"
+            );
+        }
+
+        // A still on disk is readable and deliberately not drawn, because decoding one per
+        // tile is engine work the paint path may not do until there is a cache (M10). It is
+        // named for its container, which is true, rather than for a decoder that is missing.
+        assert!(thumbnail("shot.png", 24, 16).is_none());
+        assert_eq!(
+            RESOLVER.kind("missing.png"),
+            maj_render::Placeholder::OFFLINE
+        );
+
+        // And a movie is the one thing the label was ever right about.
+        assert!(thumbnail("shot.mov", 24, 16).is_none());
+        assert_eq!(
+            RESOLVER.kind("shot.mov"),
+            maj_render::Placeholder::UNDECODABLE
+        );
+    }
+
+    #[test]
+    fn a_flat_field_thumbnails_to_one_colour() {
+        // The simplest picture there is, so the sampling and the transfer can be checked
+        // without a shape to reason about: every pixel of a solid must come out the same, and
+        // it must not come out black, which is what an unencoded scene-linear value looks like.
+        let drawn = thumbnail("solid:11,24,30", 8, 8).expect("a flat field is drawable");
+        let first: &[u8] = &drawn[0..4];
+        assert!(
+            drawn.chunks_exact(4).all(|pixel| pixel == first),
+            "a flat field is flat"
+        );
+        assert!(
+            first[0] > 16 && first[1] > 16,
+            "scene-linear light must be encoded for a screen, not blitted raw: {first:?}"
         );
     }
 }

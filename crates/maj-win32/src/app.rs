@@ -204,6 +204,15 @@ pub struct App {
     pub(crate) preview_error: Option<String>,
     /// What the frame on hand was rendered for.
     preview: Option<maj_ui::PreviewKey>,
+    /// Pool thumbnails already drawn, keyed by the URI and the size they were drawn at.
+    ///
+    /// A thumbnail is sampled from the same source the renderer reads, which costs a
+    /// deterministic transfer per channel per pixel — cheap once and ruinous thirty times a
+    /// second. Drawing one on every paint took a whole frame from 5 ms to 184 ms, which is
+    /// the measurement that put this map here. A URI names a fixed picture, so an entry
+    /// never goes stale; `None` records that the URI is not one a tile draws for itself, so
+    /// that answer is not recomputed either.
+    pub(crate) thumbnails: std::collections::HashMap<(String, u32, u32), Option<Vec<u8>>>,
     /// The leftmost visible frame of the timeline.
     pub(crate) scroll: i64,
     /// The last refusal, shown in the status bar.
@@ -316,6 +325,7 @@ impl App {
             frame: None,
             preview_error: None,
             preview: None,
+            thumbnails: std::collections::HashMap::new(),
             scroll: 0,
             error: None,
             actions: VecDeque::new(),
@@ -687,12 +697,20 @@ impl App {
     /// This is how the interface is looked at without a screen: the same `draw` the window uses,
     /// into a surface the process can read back.
     ///
+    /// The preview is rendered first, because `refresh_preview` — which is crate-private, so it
+    /// is named here rather than linked — is deliberately called
+    /// from the message loop and never from a paint, so a snapshot that only painted would show
+    /// an empty viewer and a window on screen would not. A picture of the interface that
+    /// disagrees with the interface is worse than no picture, since it is the one that gets
+    /// looked at when nobody is at the machine.
+    ///
     /// # Errors
     ///
     /// Returns a message when the file cannot be written.
     pub fn snapshot(&mut self, path: &std::path::Path, size: (i32, i32)) -> Result<String, String> {
         let rect = Rect::new(0, 0, size.0, size.1);
         let surface = win32::Scratch::detached(size.0, size.1);
+        self.refresh_preview();
         self.touch_all();
         let damage = self.take_damage(rect);
         paint::draw(surface.hdc(), rect, self, &damage);

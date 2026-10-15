@@ -277,6 +277,15 @@ impl Colour {
             (value & 0xFF) as u8,
         )
     }
+
+    /// The red, green and blue of it, for a caller that has to mix rather than fill.
+    pub(crate) const fn parts(self) -> (u8, u8, u8) {
+        (
+            (self.0 & 0xFF) as u8,
+            ((self.0 >> 8) & 0xFF) as u8,
+            ((self.0 >> 16) & 0xFF) as u8,
+        )
+    }
 }
 
 /// A solid brush, released when it goes out of scope.

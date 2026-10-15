@@ -102,7 +102,9 @@ pub(crate) fn menu_bar(hdc: Hdc, frame: &Frame, app: &mut App) {
     );
 
     // The owner's logo, on the bar, where the reference frame this interface follows also puts
-    // it. The plate is part of the artwork, so the seal is drawn as supplied, at the bar's height.
+    // it — set in the accent rather than stamped on its own white plate, because a plate on a
+    // dark bar reads as a sticker on the window instead of as the application's mark. The
+    // ground is the top of the gradient just drawn, which is where the mark sits.
     let side = (rect.height() - m.px(6)).max(m.px(8));
     let mark = Rect::new(
         rect.left + m.pad,
@@ -110,7 +112,7 @@ pub(crate) fn menu_bar(hdc: Hdc, frame: &Frame, app: &mut App) {
         rect.left + m.pad + side,
         rect.top + m.px(3) + side,
     );
-    crate::brand::seal(hdc, mark);
+    crate::brand::seal_tinted(hdc, mark, theme.accent, theme.chrome);
     let name = app.say(Key::AppName);
     let name_x = mark.right + m.px(4);
     let name_w = win32::text_width(hdc, name, &theme.heading_font);
@@ -427,7 +429,9 @@ pub(crate) fn pages(hdc: Hdc, frame: &Frame, app: &mut App) {
         rect.left + m.px(8) + corner,
         rect.top + (rect.height() - corner) / 2 + corner,
     );
-    crate::brand::seal(hdc, seal);
+    // Set in the accent, on the middle of this strip's gradient — `panel_alt` is exactly
+    // halfway between the two colours it runs through, and the mark is centred in it.
+    crate::brand::seal_tinted(hdc, seal, theme.accent, theme.panel_alt);
     let name = app.say(Key::AppName);
     let name_w = win32::text_width(hdc, name, &theme.body_font);
     win32::text(

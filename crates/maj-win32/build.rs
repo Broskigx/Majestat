@@ -83,14 +83,28 @@ fn main() {
         crop.x, crop.y, crop.side
     );
 
-    let seal = downsample(&source, crop, SEAL);
     let _ = writeln!(
         out,
-        "/// The interface's seal, {SEAL} by {SEAL}, as Windows wants a bitmap: BGRA, top-down.\n\
-         pub(crate) const SEAL_SIZE: u32 = {SEAL};\n\
-         pub(crate) const SEAL_BGRA: [u8; {}] = {};\n",
-        seal.len(),
-        array(&seal)
+        "/// The side of the interface's mark, in pixels, before it is scaled to fit.\n\
+         pub(crate) const SEAL_SIZE: u32 = {SEAL};\n"
+    );
+
+    // Only the coverage is emitted, not the plate: the interface sets the mark in its own ink,
+    // and a bitmap of white paper that nothing draws is nine kilobytes of literal to scroll
+    // past. The icons below keep the artwork as supplied, because an icon is the operating
+    // system's to place and it does not know this interface's colours.
+    let coverage = ink_coverage(&source, crop, SEAL);
+    let _ = writeln!(
+        out,
+        "/// How much of each seal pixel is **ink** rather than plate, from `255 - luma`.\n\
+         ///\n\
+         /// The supplied artwork is ink on a white plate, and a white plate on a dark interface\n\
+         /// reads as a sticker rather than as a mark. This is the same emblem as a coverage mask,\n\
+         /// so the interface can set it in whatever colour it is using, on whatever ground it has,\n\
+         /// without a second piece of artwork existing to drift from the first.\n\
+         pub(crate) const SEAL_ALPHA: [u8; {}] = {};\n",
+        coverage.len(),
+        array(&coverage)
     );
 
     for size in ICONS {
@@ -287,6 +301,38 @@ fn emblem(source: &Picture) -> Crop {
 /// A box filter rather than a nearest-neighbour sample: at sixteen pixels the difference is
 /// between a mark and a stipple, and a mean is also what makes the result independent of which
 /// pixel a cheaper resampler would have happened to start on.
+/// The emblem as a coverage mask: how much of each output pixel is ink rather than plate.
+///
+/// Box-averaged over exactly the boxes [`downsample`] uses, so the mask and the bitmap are the
+/// same picture sampled the same way, and a mark set from the mask lands on the pixels the
+/// supplied artwork puts it on.
+///
+/// `255 - luma` is the whole of it: the plate is white, so it comes out as zero coverage, and
+/// the ink is near black, so it comes out opaque. Nothing is stretched or thresholded, because a
+/// threshold would throw away the antialiasing the artwork already has and leave the mark with
+/// jagged edges at the small sizes this is used at.
+fn ink_coverage(source: &Picture, crop: Crop, size: u32) -> Vec<u8> {
+    let mut out = Vec::with_capacity((size * size) as usize);
+    for row in 0..size {
+        for column in 0..size {
+            let x0 = crop.x + column * crop.side / size;
+            let x1 = crop.x + ((column + 1) * crop.side / size).max(column * crop.side / size + 1);
+            let y0 = crop.y + row * crop.side / size;
+            let y1 = crop.y + ((row + 1) * crop.side / size).max(row * crop.side / size + 1);
+            let (mut sum, mut count) = (0_u32, 0_u32);
+            for y in y0..y1.min(crop.y + crop.side).min(source.height) {
+                for x in x0..x1.min(crop.x + crop.side).min(source.width) {
+                    sum += 255 - source.luma(x, y).min(255);
+                    count += 1;
+                }
+            }
+            let count = count.max(1);
+            out.push(((sum + count / 2) / count).min(255) as u8);
+        }
+    }
+    out
+}
+
 fn downsample(source: &Picture, crop: Crop, size: u32) -> Vec<u8> {
     let mut out = Vec::with_capacity((size * size * 4) as usize);
     for row in 0..size {

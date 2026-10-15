@@ -330,10 +330,32 @@ impl Shell {
     /// Returns whatever the engine refuses, which a correct build never does.
     pub fn example(project_name: &str) -> Result<Self, UiError> {
         let mut shell = Self::new(project_name);
-        for (index, name) in ["shot-01", "shot-02", "shot-03"].iter().enumerate() {
+        // Three shots that read as a graded sequence — a cold exterior, a warm interior, a
+        // cool night — rather than as a test chart.
+        //
+        // They used to be `generated:`, which is the seeded chart: saturated bars over a ramp
+        // over an orange checker. That chart has a job, and it is a good one — flat colour,
+        // a ramp and hard edges are exactly what a renderer has to get right, and the tests
+        // use it for that. It is the wrong thing to meet a person with. The first frame
+        // somebody sees of an editor is the editor telling them what it is, and bars say
+        // "test pattern". These are muted and distinguishable, so the viewer, the pool
+        // thumbnails and the timeline all have real pixels to show and none of them shouts.
+        //
+        // The numbers are **scene-linear light**, not screen codes: `Solid` divides them by
+        // 255 and hands the result to the compositor as light, and the viewer encodes once at
+        // the output boundary. So they look roughly twice as bright as they read here — these
+        // are chosen for what comes out of that transfer, not for what they say.
+        for (index, (name, uri)) in [
+            ("shot-01", "solid:11,24,30"),
+            ("shot-02", "solid:47,26,11"),
+            ("shot-03", "solid:20,27,40"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
             shell.dispatch(Action::CreateMediaAsset {
-                name: (*name).to_owned(),
-                uri: format!("generated:{name}"),
+                name: name.to_owned(),
+                uri: uri.to_owned(),
                 timebase: Timebase::FPS_24,
                 duration_frames: 240,
                 has_video: true,
