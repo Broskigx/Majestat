@@ -25,9 +25,9 @@ use std::path::PathBuf;
 
 use maj_core::{
     AnimChannel, BlendMode, Clip, ClipId, Command, EffectId, EffectInstance, EffectKind,
-    Interpolation, Keyframe, Mask, MaskId, MaskShape, MediaAsset, MediaAssetId, ParamValue,
-    Project, Sequence, SequenceId, Track, TrackId, TrackKind, Transform, Transition, TransitionId,
-    TransitionKind,
+    Interpolation, Keyframe, Marker, MarkerColour, MarkerId, Mask, MaskId, MaskShape, MediaAsset,
+    MediaAssetId, ParamValue, Project, Sequence, SequenceId, Track, TrackId, TrackKind, Transform,
+    Transition, TransitionId, TransitionKind,
 };
 use maj_render::{TitleAlign, TitleFace};
 use maj_time::{FrameRange, Rational, Timebase};
@@ -507,6 +507,28 @@ pub enum Action {
         /// Where the line sits between the margins.
         align: TitleAlign,
     },
+    /// Anchor a note to the active sequence at the playhead.
+    ///
+    /// The marker's name is the playhead's own timecode, which is the one thing the interface
+    /// can call it without inventing language: it says *where* the note is, it reads the same
+    /// in both languages, and a person who cares can rename it when the model grows a marker
+    /// editor. The note is what the caller has to say, and an empty one is a bare point.
+    AddMarker {
+        /// The body of the note. May be empty.
+        note: String,
+        /// Which of the eight colours to draw it in.
+        colour: MarkerColour,
+        /// Who is placing it, in the log's own vocabulary.
+        ///
+        /// The marker stores its own author, and it outlives the command that made it, so a
+        /// review can read whose note it is without replaying anything. That means the hand
+        /// has to be carried to the intention rather than inferred from the log later.
+        author: String,
+    },
+    /// Remove the marker covering the playhead.
+    RemoveMarkerAtPlayhead,
+    /// Move the marker covering the playhead to the next of the eight colours.
+    CycleMarkerColourAtPlayhead,
     /// Create a sequence.
     CreateSequence {
         /// Its name.
@@ -651,6 +673,57 @@ impl Action {
                 Ok(vec![Command::RemoveClip {
                     sequence,
                     clip: clip.id(),
+                }])
+            }
+
+            Self::AddMarker {
+                note,
+                colour,
+                author,
+            } => {
+                let sequence = context.sequence()?;
+                let frame = context.playhead.max(0);
+                let name = sequence
+                    .timecode_at(frame)
+                    .map(|timecode| timecode.to_string())
+                    .map_err(|_| {
+                        UiError::NotApplicable(
+                            "this sequence's rate cannot name a frame, so a marker here \
+                             would have no name and no note",
+                        )
+                    })?;
+                let mut allocator = Allocator::new(project);
+                let marker = Marker::new(allocator.next_marker(), name, note.clone(), frame, 0)
+                    .map_err(refused)?
+                    .with_colour(*colour)
+                    .with_author(author.clone());
+                Ok(vec![Command::AddMarker {
+                    sequence: sequence.id(),
+                    index: sequence.markers().len(),
+                    marker,
+                }])
+            }
+
+            Self::RemoveMarkerAtPlayhead => {
+                let sequence = context.sequence()?;
+                let marker = marker_at(sequence, context.playhead)?;
+                Ok(vec![Command::RemoveMarker {
+                    sequence: sequence.id(),
+                    marker: marker.id(),
+                }])
+            }
+
+            Self::CycleMarkerColourAtPlayhead => {
+                let sequence = context.sequence()?;
+                let marker = marker_at(sequence, context.playhead)?;
+                let colours = MarkerColour::ALL;
+                let next = colours
+                    .iter()
+                    .position(|colour| *colour == marker.colour())
+                    .map_or(colours[0], |index| colours[(index + 1) % colours.len()]);
+                Ok(vec![Command::SetMarker {
+                    sequence: sequence.id(),
+                    marker: marker.clone().with_colour(next),
                 }])
             }
 
@@ -1537,6 +1610,11 @@ impl Allocator {
         ClipId::new(self.take())
     }
 
+    /// An identifier for a marker.
+    fn next_marker(&mut self) -> MarkerId {
+        MarkerId::new(self.take())
+    }
+
     /// An identifier for an effect.
     fn next_effect(&mut self) -> EffectId {
         EffectId::new(self.take())
@@ -1630,6 +1708,20 @@ fn keyframe_offset(clip: &Clip, playhead: i64) -> Result<i64, UiError> {
 }
 
 /// The frames a range covers, or a refusal when it covers none.
+/// The marker covering a frame, or a refusal that says there is none.
+///
+/// A marker of zero length covers exactly the frame it sits on, so this is also how the
+/// interface finds "the marker under the playhead" for a point.
+fn marker_at(sequence: &Sequence, frame: i64) -> Result<&Marker, UiError> {
+    sequence
+        .markers()
+        .iter()
+        .find(|marker| marker.covers(frame))
+        .ok_or(UiError::NotApplicable(
+            "no marker is under the playhead: put one there first",
+        ))
+}
+
 fn range_of(start: i64, end: i64) -> Result<FrameRange, UiError> {
     FrameRange::new(start, end).map_err(refused)
 }
@@ -1752,7 +1844,13 @@ fn restore_of(
 /// A test constructs one variant of each and compares the two lists, so this cannot quietly
 /// fall behind the model; another checks that the agent's catalogue covers every one of them,
 /// which is the interface-level statement of "there is one door".
-pub const KINDS: [&str; 30] = [
+pub const KINDS: [&str; 36] = [
+    "set_sequence_start_timecode",
+    "relink_asset",
+    "set_asset_fingerprint",
+    "add_marker",
+    "remove_marker",
+    "set_marker",
     "set_channel_keys",
     "add_mask",
     "remove_mask",
@@ -1793,6 +1891,12 @@ pub const KINDS: [&str; 30] = [
 #[must_use]
 pub fn kind_of(command: &Command) -> &'static str {
     match command {
+        Command::SetSequenceStartTimecode { .. } => "set_sequence_start_timecode",
+        Command::RelinkAsset { .. } => "relink_asset",
+        Command::SetAssetFingerprint { .. } => "set_asset_fingerprint",
+        Command::AddMarker { .. } => "add_marker",
+        Command::RemoveMarker { .. } => "remove_marker",
+        Command::SetMarker { .. } => "set_marker",
         Command::SetChannelKeys { .. } => "set_channel_keys",
         Command::AddMask { .. } => "add_mask",
         Command::RemoveMask { .. } => "remove_mask",

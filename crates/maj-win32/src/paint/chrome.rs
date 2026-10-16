@@ -314,8 +314,8 @@ fn tool_usable(tool: Tool, app: &App) -> bool {
         Tool::Split | Tool::TrimIn | Tool::TrimOut | Tool::Remove | Tool::Duplicate => {
             has_selection
         }
-        // A marker would add an entity the model does not have; the button says so when pressed.
-        Tool::Marker => false,
+        // A marker anchors to a sequence, so with no sequence open there is nowhere to put one.
+        Tool::Marker => app.shell.sequence_entity().is_some(),
         _ => true,
     }
 }

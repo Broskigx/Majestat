@@ -14,7 +14,7 @@ use maj_time::Rational;
 pub const MAJ_MAGIC: &str = "MAJESTAT-PROJECT";
 
 /// Schema version this build writes.
-pub const CURRENT_SCHEMA_VERSION: u32 = 2;
+pub const CURRENT_SCHEMA_VERSION: u32 = 3;
 
 /// The authoritative document.
 ///
@@ -374,6 +374,13 @@ impl Project {
             .iter_mut()
             .find(|sequence| sequence.id == id)
             .ok_or_else(|| CoreError::not_found(SequenceId::KIND, id.raw()))
+    }
+
+    pub(crate) fn asset_mut(&mut self, id: MediaAssetId) -> Result<&mut MediaAsset, CoreError> {
+        self.assets
+            .iter_mut()
+            .find(|asset| asset.id == id)
+            .ok_or_else(|| CoreError::not_found(MediaAssetId::KIND, id.raw()))
     }
 
     /// Rejects a clip whose trim falls outside its media.

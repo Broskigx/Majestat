@@ -107,10 +107,12 @@ dependencies = [
 name = "maj-cli"
 version = "0.0.1"
 dependencies = [
+ "blake3",
  "maj-color",
  "maj-core",
  "maj-export",
  "maj-mcp",
+ "maj-media",
  "maj-render",
  "maj-time",
  "serde_json",
@@ -187,6 +189,7 @@ dependencies = [
 name = "maj-media"
 version = "0.0.1"
 dependencies = [
+ "blake3",
  "maj-core",
  "maj-time",
 ]

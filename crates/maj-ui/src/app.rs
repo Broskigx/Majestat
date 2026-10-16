@@ -16,7 +16,8 @@ use std::path::{Path, PathBuf};
 
 use maj_color::TransferFunction;
 use maj_core::{
-    AnimChannel, Clip, ClipId, MediaAsset, MediaAssetId, Project, Sequence, SequenceId, TrackKind,
+    AnimChannel, Clip, ClipId, Command, MarkerColour, MediaAsset, MediaAssetId, Project, Sequence,
+    SequenceId, TrackKind,
 };
 use maj_mcp::{Session, Sessions};
 use maj_render::{
@@ -211,6 +212,13 @@ pub struct Shell {
     notes: VecDeque<Note>,
     saved_revision: u64,
     last_render_ms: Option<f64>,
+    /// Where the autosave journal goes, when there is one.
+    ///
+    /// Beside the document, because that is what it is about: it holds the groups applied
+    /// since the last save, so a crash costs the work in flight and nothing more. It lives on
+    /// the shell rather than in the window because the shell is where a group of commands and
+    /// the hash it was applied against are both known — which is exactly what an entry is.
+    journal: Option<PathBuf>,
 }
 
 /// The title studio: what a title would say before it exists.
@@ -279,12 +287,17 @@ impl Shell {
             notes: VecDeque::new(),
             saved_revision,
             last_render_ms: None,
+            journal: None,
         };
         shell.reconcile();
         shell
     }
 
     /// A shell over a document read from disk.
+    ///
+    /// Opening a document starts autosaving beside it: from here on every group that is
+    /// applied is written to `<document>.journal` until the document is saved, which is what
+    /// makes a crash cost the edit in flight rather than the session.
     ///
     /// # Errors
     ///
@@ -294,7 +307,20 @@ impl Shell {
         let session = Session::open(SESSION, path.as_ref(), AUTHOR).map_err(|error| {
             UiError::Refused(format!("{}: {error}", text(prefs.lang, Key::ErrorOpen)))
         })?;
-        Ok(Self::with_session(session, prefs))
+        let mut shell = Self::with_session(session, prefs);
+        shell.journal = Some(maj_core::journal_path_for(path.as_ref()));
+        Ok(shell)
+    }
+
+    /// Where this session is autosaving, when it is.
+    #[must_use]
+    pub fn journal_path(&self) -> Option<&Path> {
+        self.journal.as_deref()
+    }
+
+    /// Autosaves somewhere else, or stops autosaving.
+    pub fn set_journal(&mut self, path: Option<PathBuf>) {
+        self.journal = path;
     }
 
     /// Replaces the document with one read from disk, in place.
@@ -311,6 +337,7 @@ impl Shell {
         self.media = None;
         self.playhead = replacement.playhead;
         self.saved_revision = replacement.saved_revision;
+        self.journal = replacement.journal;
         self.reconcile();
         Ok(Report {
             commands: Vec::new(),
@@ -924,7 +951,14 @@ impl Shell {
             return Ok(Report::empty());
         }
         let names: Vec<&'static str> = commands.iter().map(kind_of).collect();
-        self.session_mut().apply_group(commands).map_err(refused)?;
+        // The journal records the group against the hash it is about to be applied to, which is
+        // the one fact a recovery needs to tell "this edit has not happened yet" from "this edit
+        // is already in the document".
+        let base = self.project().document_hash().map_err(refused)?;
+        self.session_mut()
+            .apply_group(commands.clone())
+            .map_err(refused)?;
+        self.journal_group(&base, &commands);
         self.adopt_created();
         self.reconcile();
         let report = Report {
@@ -932,6 +966,57 @@ impl Shell {
             note: None,
         };
         Ok(report)
+    }
+
+    /// Records one group in the autosave journal, when the session has one.
+    ///
+    /// A failure here is **not** an edit failure: the document is the truth and the journal is
+    /// the safety net, so the two outcomes are different and are said differently. Refusing the
+    /// edit would lose the work to protect the copy of it; saying nothing would hide a hole in
+    /// the net. So it is reported as an error on the status line and the edit stands.
+    fn journal_group(&mut self, base: &str, commands: &[Command]) {
+        let Some(path) = self.journal.clone() else {
+            return;
+        };
+        let entry = match maj_core::JournalEntry::new(base, AUTHOR, commands.to_vec()) {
+            Ok(entry) => entry,
+            Err(error) => {
+                self.note(
+                    NoteKind::Error,
+                    format!("this edit was not journaled: {error}"),
+                );
+                return;
+            }
+        };
+        if let Err(error) = maj_core::journal::append(&path, &entry) {
+            self.note(
+                NoteKind::Error,
+                format!(
+                    "the journal at {} could not be written: {error}",
+                    path.display()
+                ),
+            );
+        }
+    }
+
+    /// Empties this session's journal, because the document now holds everything in it.
+    ///
+    /// Emptied rather than deleted: the file is the session's, and a file that stops existing
+    /// and a file that is empty are the same thing to a recovery, while an editor's file
+    /// manager is not a place for a tracker to make decisions.
+    fn clear_journal(&mut self) {
+        let Some(path) = self.journal.clone() else {
+            return;
+        };
+        if let Err(error) = std::fs::write(&path, "") {
+            self.note(
+                NoteKind::Error,
+                format!(
+                    "the journal at {} could not be emptied: {error}",
+                    path.display()
+                ),
+            );
+        }
     }
 
     /// Applies a keyboard binding, resolving the parts that need the shell's own state.
@@ -968,6 +1053,15 @@ impl Shell {
             Binding::CloseGap => self.dispatch(Action::CloseGap),
             Binding::RippleDelete => self.dispatch(Action::RippleDelete),
             Binding::InsertBlank => self.dispatch(Action::InsertBlank),
+            // A marker stores who wrote it, and the hand is the shell's own author, which the
+            // table cannot know: the same intention is the agent's when a tool call builds it.
+            Binding::AddMarker => self.dispatch(Action::AddMarker {
+                note: String::new(),
+                colour: MarkerColour::Blue,
+                author: AUTHOR.to_owned(),
+            }),
+            Binding::RemoveMarker => self.dispatch(Action::RemoveMarkerAtPlayhead),
+            Binding::CycleMarkerColour => self.dispatch(Action::CycleMarkerColourAtPlayhead),
             // Keyframes resolve here for the same reason the edit points do: where a clip's keys
             // sit, and which of its channels have curves, are facts about the document that only
             // the shell is holding.
@@ -1302,6 +1396,8 @@ impl Shell {
         self.media = None;
         self.playhead = example.playhead;
         self.saved_revision = example.saved_revision;
+        // The example has no path, so there is nothing to autosave beside it.
+        self.journal = None;
         self.reconcile();
         Ok(Report {
             commands: Vec::new(),
@@ -1328,6 +1424,7 @@ impl Shell {
         let (path, digest) = self.session_mut().save(None).map_err(refused)?;
         let revision = self.project().revision();
         self.saved_revision = revision;
+        self.clear_journal();
         Ok(Report {
             commands: Vec::new(),
             note: Some(format!("saved {} · {digest}", path.display())),
@@ -1346,6 +1443,10 @@ impl Shell {
             .map_err(refused)?;
         let revision = self.project().revision();
         self.saved_revision = revision;
+        // Saving as a new path moves the journal with the document, and empties it: the work
+        // that was in flight is now in the file it belongs to.
+        self.journal = Some(maj_core::journal_path_for(&path));
+        self.clear_journal();
         Ok(Report {
             commands: Vec::new(),
             note: Some(format!("saved {} · {digest}", path.display())),
@@ -1868,7 +1969,7 @@ mod tests {
 
     #[test]
     fn an_export_writes_a_still_and_its_manifest() {
-        let directory = std::env::temp_dir().join("maj-ui-export");
+        let directory = std::env::temp_dir().join(format!("maj-ui-export-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&directory);
         std::fs::create_dir_all(&directory).expect("a scratch directory");
         let mut shell = Shell::example("example").expect("the example builds");
@@ -1891,7 +1992,7 @@ mod tests {
 
     #[test]
     fn saving_clears_the_unsaved_state_and_survives_a_round_trip() {
-        let directory = std::env::temp_dir().join("maj-ui-save");
+        let directory = std::env::temp_dir().join(format!("maj-ui-save-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&directory);
         std::fs::create_dir_all(&directory).expect("a scratch directory");
         let path = directory.join("example.maj");

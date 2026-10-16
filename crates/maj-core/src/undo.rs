@@ -790,3 +790,311 @@ mod tests {
         assert_eq!(fixture.project.state_hash().unwrap(), hash);
     }
 }
+
+#[cfg(test)]
+mod p1_command_tests {
+    use super::*;
+    use crate::entity::{Marker, MarkerColour, MediaAsset, MediaFingerprint, Sequence};
+    use crate::ids::{MarkerId, MediaAssetId, SequenceId};
+    use maj_time::Timebase;
+
+    /// A project with one asset and one sequence, which is all these commands need.
+    fn fixture() -> (Project, History, MediaAssetId, SequenceId) {
+        let mut project = Project::new("p1");
+        let mut history = History::new();
+        let asset = MediaAssetId::new(1);
+        let sequence = SequenceId::new(2);
+        history
+            .apply_local(
+                &mut project,
+                Command::CreateMediaAsset {
+                    index: 0,
+                    asset: MediaAsset::new(
+                        asset,
+                        "shot.mov",
+                        "file:///offline/shot.mov",
+                        Timebase::FPS_25,
+                        2_400,
+                    )
+                    .unwrap(),
+                },
+            )
+            .unwrap();
+        history
+            .apply_local(
+                &mut project,
+                Command::CreateSequence {
+                    index: 0,
+                    sequence: Sequence::new(
+                        sequence,
+                        "Reel A",
+                        Timebase::FPS_25,
+                        1920,
+                        1080,
+                        48_000,
+                    )
+                    .unwrap(),
+                },
+            )
+            .unwrap();
+        (project, history, asset, sequence)
+    }
+
+    /// Applies a command, undoes it and redoes it, asserting the state returns exactly.
+    fn undo_is_exact(project: &mut Project, history: &mut History, command: Command) {
+        let before = project.state_hash().unwrap();
+        history.apply_local(project, command).unwrap();
+        let after = project.state_hash().unwrap();
+        assert_ne!(after, before, "the command did nothing");
+        history.undo(project).unwrap();
+        assert_eq!(
+            project.state_hash().unwrap(),
+            before,
+            "undo did not restore the state exactly"
+        );
+        history.redo(project).unwrap();
+        assert_eq!(
+            project.state_hash().unwrap(),
+            after,
+            "redo did not restore the state exactly"
+        );
+        assert!(project.is_valid());
+    }
+
+    #[test]
+    fn naming_frame_zero_is_exactly_reversible_and_moves_no_clip() {
+        let (mut project, mut history, _, sequence) = fixture();
+        undo_is_exact(
+            &mut project,
+            &mut history,
+            Command::SetSequenceStartTimecode {
+                sequence,
+                frames: 90_000,
+            },
+        );
+        history
+            .apply_local(
+                &mut project,
+                Command::SetSequenceStartTimecode {
+                    sequence,
+                    frames: 90_000,
+                },
+            )
+            .unwrap();
+        let entity = project.sequence(sequence).unwrap();
+        assert_eq!(entity.start_timecode().unwrap().hours(), 1);
+        assert_eq!(
+            entity.timecode_at(0).unwrap().hours(),
+            1,
+            "a label, not a move: frame zero is still frame zero"
+        );
+    }
+
+    #[test]
+    fn a_start_timecode_before_zero_is_refused_as_a_command_too() {
+        let (mut project, mut history, _, sequence) = fixture();
+        let before = project.state_hash().unwrap();
+        let refusal = history.apply_local(
+            &mut project,
+            Command::SetSequenceStartTimecode {
+                sequence,
+                frames: -1,
+            },
+        );
+        assert!(refusal.is_err());
+        assert_eq!(
+            project.state_hash().unwrap(),
+            before,
+            "a refused command changes nothing"
+        );
+    }
+
+    #[test]
+    fn relinking_keeps_the_identity_and_reverses_exactly() {
+        let (mut project, mut history, asset, _) = fixture();
+        undo_is_exact(
+            &mut project,
+            &mut history,
+            Command::RelinkAsset {
+                asset,
+                uri: "file:///online/A001C001.mov".to_owned(),
+            },
+        );
+        history
+            .apply_local(
+                &mut project,
+                Command::RelinkAsset {
+                    asset,
+                    uri: "file:///online/A001C001.mov".to_owned(),
+                },
+            )
+            .unwrap();
+        let relinked = project.asset(asset).unwrap();
+        assert_eq!(relinked.uri(), "file:///online/A001C001.mov");
+        assert_eq!(relinked.id(), asset, "the identity is what does not move");
+        assert_eq!(relinked.name(), "shot.mov", "and neither does the name");
+
+        let nowhere = history.apply_local(
+            &mut project,
+            Command::RelinkAsset {
+                asset,
+                uri: "  ".to_owned(),
+            },
+        );
+        assert!(
+            nowhere.is_err(),
+            "an asset pointing at nothing is not a relink"
+        );
+    }
+
+    #[test]
+    fn a_fingerprint_can_be_recorded_and_forgotten_exactly() {
+        let (mut project, mut history, asset, _) = fixture();
+        assert!(!project.asset(asset).unwrap().is_verified());
+
+        undo_is_exact(
+            &mut project,
+            &mut history,
+            Command::SetAssetFingerprint {
+                asset,
+                fingerprint: Some(MediaFingerprint::new("9f2b", 1_048_576, Some(2_400)).unwrap()),
+            },
+        );
+
+        history
+            .apply_local(
+                &mut project,
+                Command::SetAssetFingerprint {
+                    asset,
+                    fingerprint: Some(
+                        MediaFingerprint::new("9f2b", 1_048_576, Some(2_380)).unwrap(),
+                    ),
+                },
+            )
+            .unwrap();
+        let measured = project.asset(asset).unwrap();
+        assert!(measured.is_verified());
+        assert!(
+            measured.duration_disagrees(),
+            "2380 measured against 2400 declared is a disagreement to report"
+        );
+
+        undo_is_exact(
+            &mut project,
+            &mut history,
+            Command::SetAssetFingerprint {
+                asset,
+                fingerprint: None,
+            },
+        );
+    }
+
+    #[test]
+    fn markers_are_added_changed_and_removed_exactly() {
+        let (mut project, mut history, _, sequence) = fixture();
+        let marker = Marker::new(MarkerId::new(10), "regrade", "too warm", 240, 72)
+            .unwrap()
+            .with_colour(MarkerColour::Yellow);
+
+        undo_is_exact(
+            &mut project,
+            &mut history,
+            Command::AddMarker {
+                sequence,
+                index: 0,
+                marker: marker.clone(),
+            },
+        );
+        // `undo_is_exact` leaves the command redone, so the marker is on the sequence now.
+        assert_eq!(project.sequence(sequence).unwrap().markers().len(), 1);
+
+        let twice = history.apply_local(
+            &mut project,
+            Command::AddMarker {
+                sequence,
+                index: 0,
+                marker,
+            },
+        );
+        assert!(twice.is_err(), "the same identifier twice is a duplicate");
+
+        undo_is_exact(
+            &mut project,
+            &mut history,
+            Command::SetMarker {
+                sequence,
+                marker: Marker::new(MarkerId::new(10), "regrade", "fixed", 240, 72)
+                    .unwrap()
+                    .with_colour(MarkerColour::Green),
+            },
+        );
+        undo_is_exact(
+            &mut project,
+            &mut history,
+            Command::RemoveMarker {
+                sequence,
+                marker: MarkerId::new(10),
+            },
+        );
+
+        let absent = history.apply_local(
+            &mut project,
+            Command::RemoveMarker {
+                sequence,
+                marker: MarkerId::new(99),
+            },
+        );
+        assert!(
+            absent.is_err(),
+            "a marker that is not there cannot be removed"
+        );
+    }
+
+    #[test]
+    fn removing_a_marker_from_the_middle_puts_it_back_where_it_was() {
+        // The same promise clips already make: undo restores position, not just presence.
+        let (mut project, mut history, _, sequence) = fixture();
+        for (id, name) in [(10, "one"), (11, "two"), (12, "three")] {
+            let index = project.sequence(sequence).unwrap().markers().len();
+            history
+                .apply_local(
+                    &mut project,
+                    Command::AddMarker {
+                        sequence,
+                        index,
+                        marker: Marker::new(
+                            MarkerId::new(id),
+                            name,
+                            "",
+                            i64::try_from(id).unwrap(),
+                            0,
+                        )
+                        .unwrap(),
+                    },
+                )
+                .unwrap();
+        }
+        let peak = project.state_hash().unwrap();
+
+        history
+            .apply_local(
+                &mut project,
+                Command::RemoveMarker {
+                    sequence,
+                    marker: MarkerId::new(11),
+                },
+            )
+            .unwrap();
+        history.undo(&mut project).unwrap();
+
+        let names: Vec<&str> = project
+            .sequence(sequence)
+            .unwrap()
+            .markers()
+            .iter()
+            .map(Marker::name)
+            .collect();
+        assert_eq!(names, vec!["one", "two", "three"]);
+        assert_eq!(project.state_hash().unwrap(), peak);
+    }
+}

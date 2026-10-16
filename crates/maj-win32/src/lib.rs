@@ -88,11 +88,13 @@ mod tests {
                 !glyphs::name(tool.glyph()).is_empty(),
                 "{tool:?} has no picture"
             );
-            // Every tool either has a stroke that reaches it or is one of the two the mouse is
-            // for: fitting the sequence and dropping a marker the model cannot hold yet.
+            // Every tool has a stroke that reaches it except the one the mouse is for: fitting
+            // the sequence, which has no stroke of its own and lives in the View menu. The
+            // marker tool used to be the second exception; it has a stroke now (`m`), so this
+            // list is down to one and a new button without a key fails here.
             if tool.binding().is_none() {
                 assert!(
-                    matches!(tool, Tool::ZoomFit | Tool::Marker),
+                    matches!(tool, Tool::ZoomFit),
                     "{tool:?} has no stroke and no reason to be a button"
                 );
             }

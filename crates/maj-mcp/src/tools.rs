@@ -1236,7 +1236,8 @@ mod tests {
             "maj_place_clip",
             r#"{"sequence":2,"kind":"video","asset":1,"source_range":[0,48],"timeline_start":0}"#,
         );
-        let directory = std::env::temp_dir().join("maj-mcp-tool-tests");
+        let directory =
+            std::env::temp_dir().join(format!("maj-mcp-tool-tests-{}", std::process::id()));
         std::fs::create_dir_all(&directory).expect("a scratch directory");
         let out = directory.join("frame.0000.png");
         let outcome = call_with(

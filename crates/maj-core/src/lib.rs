@@ -60,6 +60,7 @@
 //! - [`IdAllocator`] — runtime identifier allocation, deliberately not persisted.
 //! - [`determinism`] — canonical serialisation and content hashing.
 //! - [`mod@format`] — reading and writing `.maj`.
+//! - [`mod@journal`] — the autosave sidecar: the work that is not in the document yet.
 //! - [`CoreError`] — every way this layer can fail.
 
 mod command;
@@ -72,17 +73,22 @@ mod undo;
 
 pub mod determinism;
 pub mod format;
+pub mod journal;
 
 pub use command::{Command, DEFAULT_AUTHOR, LogEntry};
 pub use composite::{
     AnimChannel, BlendMode, ChannelAnimation, EffectInstance, EffectKind, Interpolation, Keyframe,
     Mask, MaskShape, Param, ParamSpec, ParamValue, Rgba, Transform, Transition, TransitionKind,
 };
-pub use entity::{Clip, MediaAsset, Sequence, Track, TrackKind};
+pub use entity::{
+    Clip, Marker, MarkerColour, MediaAsset, MediaFingerprint, Sequence, Track, TrackKind,
+};
 pub use error::CoreError;
 pub use ids::{
-    ClipId, EffectId, IdAllocator, MaskId, MediaAssetId, SequenceId, TrackId, TransitionId,
+    ClipId, EffectId, IdAllocator, MarkerId, MaskId, MediaAssetId, SequenceId, TrackId,
+    TransitionId,
 };
+pub use journal::{JOURNAL_EXTENSION, JournalEntry, JournalError, Recovery, journal_path_for};
 pub use project::{CURRENT_SCHEMA_VERSION, MAJ_MAGIC, Project};
 // The time types the model already hands back and accepts: re-exported so a caller can name
 // a `FrameRange` it was given, or build the `Timebase` a sequence needs, without reaching

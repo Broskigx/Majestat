@@ -24,10 +24,10 @@ use crate::composite::{
     AnimChannel, BlendMode, ChannelAnimation, EffectInstance, Keyframe, Mask, ParamValue,
     Transform, Transition,
 };
-use crate::entity::{Clip, MediaAsset, Sequence, Track};
+use crate::entity::{Clip, Marker, MediaAsset, MediaFingerprint, Sequence, Track};
 use crate::error::CoreError;
 use crate::ids::{ClipId, MediaAssetId, SequenceId, TrackId};
-use crate::ids::{EffectId, MaskId, TransitionId};
+use crate::ids::{EffectId, MarkerId, MaskId, TransitionId};
 use crate::project::Project;
 
 /// Author recorded on commands applied by the local user.
@@ -216,6 +216,60 @@ pub enum Command {
         /// New value.
         value: ParamValue,
     },
+    /// Names frame zero of a sequence, as a frame count at its timebase.
+    ///
+    /// A label, not a move: no clip changes position. It is what an EDL, a burn-in and a
+    /// QC report call the first frame.
+    SetSequenceStartTimecode {
+        /// Which sequence.
+        sequence: SequenceId,
+        /// What frame zero is called, in frames. Never negative.
+        frames: i64,
+    },
+    /// Points an asset at a different file.
+    ///
+    /// This is relinking: the identity of the asset is unchanged, so every clip that reads
+    /// it keeps its trims, its effects and its place. Only where the bytes come from moves.
+    RelinkAsset {
+        /// Which asset.
+        asset: MediaAssetId,
+        /// Where it now lives.
+        uri: String,
+    },
+    /// Records, or clears, what an asset's file measured.
+    ///
+    /// Measuring is I/O and this layer does none, so the measurement is taken where files
+    /// are read and arrives here as a command — which is what makes it undoable, replayable
+    /// and attributable like every other fact in the document.
+    SetAssetFingerprint {
+        /// Which asset.
+        asset: MediaAssetId,
+        /// What it measured, or `None` to say it is no longer known.
+        fingerprint: Option<MediaFingerprint>,
+    },
+    /// Anchors a note to a sequence.
+    AddMarker {
+        /// Which sequence.
+        sequence: SequenceId,
+        /// Where in the sequence's marker list it goes.
+        index: usize,
+        /// The marker itself.
+        marker: Marker,
+    },
+    /// Removes a note from a sequence.
+    RemoveMarker {
+        /// Which sequence.
+        sequence: SequenceId,
+        /// Which marker.
+        marker: MarkerId,
+    },
+    /// Replaces a note, keeping its identity and its place in the list.
+    SetMarker {
+        /// Which sequence.
+        sequence: SequenceId,
+        /// The marker, whose identifier names the one it replaces.
+        marker: Marker,
+    },
     /// Registers media at a position in the asset list.
     CreateMediaAsset {
         /// Insertion index within the asset list.
@@ -381,6 +435,84 @@ impl Command {
     /// never leaves a half-applied edit behind.
     pub fn apply(&self, project: &mut Project) -> Result<Command, CoreError> {
         match self {
+            Self::SetSequenceStartTimecode { sequence, frames } => {
+                if *frames < 0 {
+                    return Err(CoreError::invalid(
+                        "a sequence's start timecode cannot be before zero",
+                    ));
+                }
+                let target = project.sequence_mut(*sequence)?;
+                let previous = target.start_timecode_frames;
+                target.start_timecode_frames = *frames;
+                Ok(Self::SetSequenceStartTimecode {
+                    sequence: *sequence,
+                    frames: previous,
+                })
+            }
+            Self::RelinkAsset { asset, uri } => {
+                if uri.trim().is_empty() {
+                    return Err(CoreError::invalid("an asset needs somewhere to point at"));
+                }
+                let target = project.asset_mut(*asset)?;
+                let previous = std::mem::replace(&mut target.uri, uri.clone());
+                Ok(Self::RelinkAsset {
+                    asset: *asset,
+                    uri: previous,
+                })
+            }
+            Self::SetAssetFingerprint { asset, fingerprint } => {
+                let target = project.asset_mut(*asset)?;
+                let previous = std::mem::replace(&mut target.fingerprint, fingerprint.clone());
+                Ok(Self::SetAssetFingerprint {
+                    asset: *asset,
+                    fingerprint: previous,
+                })
+            }
+            Self::AddMarker {
+                sequence,
+                index,
+                marker,
+            } => {
+                let target = project.sequence_mut(*sequence)?;
+                if target.marker(marker.id()).is_some() {
+                    return Err(CoreError::duplicate(MarkerId::KIND, marker.id().raw()));
+                }
+                if *index > target.markers.len() {
+                    return Err(CoreError::index_out_of_range(*index, target.markers.len()));
+                }
+                target.markers.insert(*index, marker.clone());
+                Ok(Self::RemoveMarker {
+                    sequence: *sequence,
+                    marker: marker.id(),
+                })
+            }
+            Self::RemoveMarker { sequence, marker } => {
+                let target = project.sequence_mut(*sequence)?;
+                let index = target
+                    .markers
+                    .iter()
+                    .position(|candidate| candidate.id() == *marker)
+                    .ok_or_else(|| CoreError::not_found(MarkerId::KIND, marker.raw()))?;
+                let removed = target.markers.remove(index);
+                Ok(Self::AddMarker {
+                    sequence: *sequence,
+                    index,
+                    marker: removed,
+                })
+            }
+            Self::SetMarker { sequence, marker } => {
+                let target = project.sequence_mut(*sequence)?;
+                let slot = target
+                    .markers
+                    .iter_mut()
+                    .find(|candidate| candidate.id() == marker.id())
+                    .ok_or_else(|| CoreError::not_found(MarkerId::KIND, marker.id().raw()))?;
+                let previous = std::mem::replace(slot, marker.clone());
+                Ok(Self::SetMarker {
+                    sequence: *sequence,
+                    marker: previous,
+                })
+            }
             Self::CreateMediaAsset { index, asset } => {
                 if project.asset(asset.id()).is_some() {
                     return Err(CoreError::duplicate(MediaAssetId::KIND, asset.id().raw()));
@@ -893,6 +1025,12 @@ impl Command {
     #[must_use]
     pub const fn kind(&self) -> &'static str {
         match self {
+            Self::SetSequenceStartTimecode { .. } => "set_sequence_start_timecode",
+            Self::RelinkAsset { .. } => "relink_asset",
+            Self::SetAssetFingerprint { .. } => "set_asset_fingerprint",
+            Self::AddMarker { .. } => "add_marker",
+            Self::RemoveMarker { .. } => "remove_marker",
+            Self::SetMarker { .. } => "set_marker",
             Self::CreateMediaAsset { .. } => "create_media_asset",
             Self::RemoveMediaAsset { .. } => "remove_media_asset",
             Self::InsertMediaAsset { .. } => "insert_media_asset",

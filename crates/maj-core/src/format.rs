@@ -115,14 +115,15 @@ pub fn rebuild_from_log(
 
 /// Applies schema migrations in order until the document matches this build.
 ///
-/// Version 1 is the first published schema, so the loop has nothing to do today. The
-/// shape is here so that a future schema adds an arm instead of a special case, and so
-/// that an unknown older version fails loudly.
+/// Each step is a pure function from one JSON value to the next, applied in order, so a
+/// new schema adds an arm rather than a special case and an unknown older version fails
+/// loudly instead of being loaded as something it is not.
 fn migrate(mut value: Value, from: u32) -> Result<Value, CoreError> {
     let mut version = from;
     while version < CURRENT_SCHEMA_VERSION {
         value = match version {
             1 => v1_to_v2(value)?,
+            2 => v2_to_v3(value)?,
             _ => {
                 return Err(CoreError::SchemaUnsupported {
                     found: version,
@@ -137,6 +138,42 @@ fn migrate(mut value: Value, from: u32) -> Result<Value, CoreError> {
             "schema_version".to_owned(),
             Value::from(CURRENT_SCHEMA_VERSION),
         );
+    }
+    Ok(value)
+}
+
+/// Schema 2 to 3: gives every sequence a start timecode and a marker list, and every
+/// asset a place to record what its file measured.
+///
+/// Every added field has a defaulted meaning that is the truth about a version 2 document
+/// rather than a convenient blank: frame zero was called `00:00:00:00` because there was
+/// nothing else it could be called, there were no markers, and **nothing had measured any
+/// media** — which is exactly what `fingerprint: null` says. A migration that invented a
+/// fingerprint would be asserting a measurement that never happened.
+fn v2_to_v3(mut value: Value) -> Result<Value, CoreError> {
+    let root = value
+        .as_object_mut()
+        .ok_or_else(|| CoreError::invalid("a project document must be a JSON object"))?;
+    if let Some(assets) = root.get_mut("assets").and_then(Value::as_array_mut) {
+        for asset in assets.iter_mut() {
+            let Some(asset_object) = asset.as_object_mut() else {
+                continue;
+            };
+            asset_object.entry("fingerprint").or_insert(Value::Null);
+        }
+    }
+    if let Some(sequences) = root.get_mut("sequences").and_then(Value::as_array_mut) {
+        for sequence in sequences.iter_mut() {
+            let Some(sequence_object) = sequence.as_object_mut() else {
+                continue;
+            };
+            sequence_object
+                .entry("start_timecode_frames")
+                .or_insert_with(|| Value::from(0));
+            sequence_object
+                .entry("markers")
+                .or_insert_with(|| Value::Array(Vec::new()));
+        }
     }
     Ok(value)
 }
@@ -367,11 +404,21 @@ mod tests {
         assert_eq!(rebuilt.next_unused_id(), 1);
     }
 
+    /// The document's own version line, built from the constant rather than typed.
+    ///
+    /// These two tests edit the version out of a real document, and writing `2` into them
+    /// meant they stopped testing anything the moment the schema moved — they passed by
+    /// failing to find what they meant to break.
+    fn version_line() -> String {
+        format!("\"schema_version\": {CURRENT_SCHEMA_VERSION}")
+    }
+
     #[test]
     fn a_newer_schema_is_refused_with_a_clear_message() {
-        let mut text = to_pretty_json(&built_project()).unwrap();
-        text = text.replacen("\"schema_version\": 2", "\"schema_version\": 99", 1);
-        let err = load_from_str(&text).unwrap_err();
+        let text = to_pretty_json(&built_project()).unwrap();
+        let newer = text.replacen(&version_line(), "\"schema_version\": 99", 1);
+        assert_ne!(newer, text, "the version line must have been found");
+        let err = load_from_str(&newer).unwrap_err();
         assert!(matches!(
             err,
             CoreError::SchemaUnsupported { found: 99, .. }
@@ -382,7 +429,8 @@ mod tests {
     #[test]
     fn a_missing_schema_version_is_refused() {
         let text = to_pretty_json(&built_project()).unwrap();
-        let broken = text.replace("\"schema_version\": 2,", "");
+        let broken = text.replace(&format!("{},", version_line()), "");
+        assert_ne!(broken, text, "the version line must have been found");
         assert_eq!(load_from_str(&broken), Err(CoreError::SchemaMissing));
     }
 
@@ -450,7 +498,9 @@ mod tests {
 
     #[test]
     fn saving_and_loading_a_file_round_trips() {
-        let directory = std::env::temp_dir().join("maj-core-format-tests");
+        // Per process: two sessions in one checkout can run this suite at once.
+        let directory =
+            std::env::temp_dir().join(format!("maj-core-format-tests-{}", std::process::id()));
         std::fs::create_dir_all(&directory).unwrap();
         let path = directory.join(format!("round-trip.{}", MAJ_EXTENSION));
 
@@ -499,13 +549,61 @@ mod tests {
         assert!(reloaded.sequences()[0].track(TrackId::new(3)).is_some());
         assert_eq!(reloaded.next_unused_id(), project.next_unused_id());
     }
+
+    #[test]
+    fn a_version_two_document_gains_a_timecode_a_marker_list_and_an_unmeasured_asset() {
+        // The promise a migration has to keep: every added field gets the meaning that was
+        // *true* of the old document, not a convenient blank. A version 2 document called
+        // frame zero 00:00:00:00 because there was nothing else to call it, had no markers,
+        // and — this is the one that matters — had measured no media. A migration that
+        // invented a fingerprint would assert a measurement that never happened, and every
+        // trim in the project is clamped against exactly that number.
+        let project = built_project();
+        let mut value: Value = serde_json::from_str(&to_pretty_json(&project).unwrap()).unwrap();
+        value["schema_version"] = Value::from(2);
+        for asset in value["assets"].as_array_mut().unwrap() {
+            asset.as_object_mut().unwrap().remove("fingerprint");
+        }
+        for sequence in value["sequences"].as_array_mut().unwrap() {
+            let object = sequence.as_object_mut().unwrap();
+            object.remove("start_timecode_frames");
+            object.remove("markers");
+        }
+
+        let text = serde_json::to_string_pretty(&value).unwrap();
+        let migrated = load_from_str(&text).unwrap();
+
+        assert_eq!(migrated.schema_version(), CURRENT_SCHEMA_VERSION);
+        assert_eq!(
+            migrated.state_hash().unwrap(),
+            project.state_hash().unwrap(),
+            "migrating a version 2 document must reproduce the current state exactly"
+        );
+        let sequence = migrated.sequences().first().expect("a sequence");
+        assert_eq!(sequence.start_timecode_frames(), 0);
+        assert!(sequence.markers().is_empty());
+        let asset = migrated.assets().first().expect("an asset");
+        assert!(
+            !asset.is_verified(),
+            "nothing had measured this file, and the migration must not pretend otherwise"
+        );
+        assert!(migrated.is_valid());
+    }
     #[test]
     fn a_version_one_document_is_migrated_into_the_compositing_model() {
         let project = built_project();
         let mut value: Value = serde_json::from_str(&to_pretty_json(&project).unwrap()).unwrap();
         value["schema_version"] = Value::from(1);
-        // Strip everything schema 2 added, producing a genuine version 1 document.
+        // Strip everything schemas 2 and 3 added, producing a genuine version 1 document —
+        // not a current one with its version number edited, which would exercise neither
+        // step of the chain.
+        for asset in value["assets"].as_array_mut().unwrap() {
+            asset.as_object_mut().unwrap().remove("fingerprint");
+        }
         for sequence in value["sequences"].as_array_mut().unwrap() {
+            let object = sequence.as_object_mut().unwrap();
+            object.remove("start_timecode_frames");
+            object.remove("markers");
             for track in sequence["tracks"].as_array_mut().unwrap() {
                 track.as_object_mut().unwrap().remove("transitions");
                 for clip in track["clips"].as_array_mut().unwrap() {

@@ -43,15 +43,18 @@ layer can store rates without the arithmetic core acquiring a dependency graph.
 
 ### Layer 1 — `maj-core`
 
-The document. Entities (media, sequences, tracks, clips), the command log, undo and
-redo, invariant validation, canonical serialisation and content hashing. Depends on
+The document. Entities (media, sequences, tracks, clips, markers), the command log, undo
+and redo, invariant validation, canonical serialisation and content hashing, and the
+autosave journal that lives beside the document rather than inside it. Depends on
 `maj-time` and on `serde`/`serde_json`/`blake3` for persistence.
 
 ### Layer 2 — `maj-media`, `maj-cache`
 
 Media I/O behind an owned abstraction (probe, demux, decode, seek, waveforms,
 thumbnails, hardware decode surfaces) and the four cache layers keyed by the hash of
-every rendering input.
+every rendering input. What exists in `maj-media` today is the part that needs no decoder:
+measuring a file's bytes (BLAKE3, size) and finding them again by hash. The probe, the
+demuxer and the decoder are still to come, and `docs/MEDIA.md` is their design.
 
 ### Layer 3 — `maj-graph`, `maj-color`, `maj-gpu`
 
@@ -80,7 +83,7 @@ shape — see ADR 0011.
 The shell, its window, the headless CLI that will host `maj render --verify`, and the
 scripting surface. All four drive the same command API as the agent does.
 
-`maj-ui` is the shell as a **model**: 77 intentions, a keyboard table, seven pages, two
+`maj-ui` is the shell as a **model**: 80 intentions, a keyboard table, seven pages, two
 languages and a preference file, all of which translate into the same commands an agent's
 tools append. It
 carries no windowing dependency at all, deliberately: the toolkit could not be built on this
@@ -103,7 +106,7 @@ See ADR 0012, ADR 0013 and `docs/UI.md`.
 |---|---|---|
 | `maj-time` | 0 | **done (M1)** |
 | `maj-core` | 1 | **done (M1)** |
-| `maj-media`, `maj-cache` | 2 | M2, M10 |
+| `maj-media`, `maj-cache` | 2 | measurement done (P1); probe and decoder are M2, cache is M10 |
 | `maj-graph`, `maj-gpu` | 3 | M4 |
 | `maj-color` | 3 | **done (M5)** |
 | `maj-playback` | 4 | M3 |

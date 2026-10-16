@@ -13,7 +13,7 @@ capabilities then fall out of one arrangement instead of being bolted on:
   `maj render --verify` will prove it rather than assert it.
 * **An agent that really edits** — the Pilot (M11) drives the same typed commands the UI
   does, so its work is undoable, reviewable and diffable. The Model Context Protocol
-  server that exposes them is already here: `maj-mcp`, forty-five tools over one log.
+  server that exposes them is already here: `maj-mcp`, 51 tools over one log.
 * **Realtime collaboration** — syncing semantic commands is tractable; there is no opaque
   binary blob to lock (M12).
 * **Verifiable cloud rendering** — a remote render is checked by hash instead of trusted
@@ -21,18 +21,18 @@ capabilities then fall out of one arrangement instead of being bolted on:
 
 ## Status
 
-**M0 (foundation) and M1 (determinism) are complete, the engine renders, and there is a
-window to edit in.** Nine crates carry real code — time, model, colour, render, export, the
-CLI, the MCP server, the shell and its window — and the other thirteen are documented
-scaffolds: each declares its responsibility and its layer, and each declares the lower-layer
-dependencies it is allowed to use, so the compiler enforces the architecture from the first
-commit.
+**M0 (foundation) and M1 (determinism) are complete, P1 (the document floor) is in, the
+engine renders, and there is a window to edit in.** Ten crates carry real code — time,
+model, media, colour, render, export, the CLI, the MCP server, the shell and its window —
+and the other twelve are documented scaffolds: each declares its responsibility and its
+layer, and each declares the lower-layer dependencies it is allowed to use, so the compiler
+enforces the architecture from the first commit.
 
 | | |
 |---|---|
-| Implemented | `maj-time` (rational time, timecode, retiming) · `maj-core` (model, command log, undo, `.maj`) · `maj-color` (transfers, determinism policy) · `maj-render` (the offline renderer: charts, PPM and PNG stills, titles) · `maj-export` (stills, manifests) · `maj-cli` (`render`, `verify`, `probe`, `bench`, `edit`, `mcp`) · `maj-mcp` (the editor over MCP) · `maj-ui` (the shell: intentions, keyboard, two languages, preferences) · `maj-win32` (the window: the `majestat` app) |
-| Tested | 539 tests across 53 test targets, plus a ten-thousand-command fuzz on the release gate |
-| Scaffolds | `maj-media` (M2), `maj-playback` (M3), `maj-graph` and `maj-gpu` (M4), `maj-timeline` (M6), `maj-audio` (M9), `maj-cache` (M10), `maj-agent` and `maj-ai` (M11), `maj-collab` (M12), `maj-cloud` (M13), `maj-plugins` and `maj-script` (M14) |
+| Implemented | `maj-time` (rational time, timecode, retiming) · `maj-core` (model, command log, undo, markers, `.maj`, the autosave journal) · `maj-media` (measuring a file: BLAKE3 of its bytes, its size, and finding it again by hash) · `maj-color` (transfers, determinism policy) · `maj-render` (the offline renderer: charts, PPM and PNG stills, titles) · `maj-export` (stills, manifests) · `maj-cli` (`render`, `verify`, `probe`, `bench`, `edit`, `fingerprint`, `relink`, `recover`, `mcp`) · `maj-mcp` (the editor over MCP) · `maj-ui` (the shell: intentions, keyboard, two languages, preferences) · `maj-win32` (the window: the `majestat` app) |
+| Tested | 579 tests across 54 test targets, all green, plus a ten-thousand-command fuzz on the release gate |
+| Scaffolds | `maj-media`'s probe and decoder (M2 proper), `maj-playback` (M3), `maj-graph` and `maj-gpu` (M4), `maj-timeline` (M6), `maj-audio` (M9), `maj-cache` (M10), `maj-agent` and `maj-ai` (M11), `maj-collab` (M12), `maj-cloud` (M13), `maj-plugins` and `maj-script` (M14) |
 
 A frame renders to a still and a manifest, three renders of one revision are byte-identical,
 an agent can build a project over the Model Context Protocol ([`docs/MCP.md`](docs/MCP.md)),
@@ -80,6 +80,7 @@ gate above is the full one.
 crates/           22 crates in seven layers; see docs/ARCHITECTURE.md
   maj-time/       layer 0 — rational time, timecode, retiming        (done)
   maj-core/       layer 1 — model, command log, undo, .maj           (done)
+  maj-media/      layer 2 — measuring a file, relinking by hash      (measure done)
   maj-render/     layer 4 — the offline renderer                     (done)
   maj-export/     layer 5 — stills, manifests, encoders              (stills done)
   maj-mcp/        layer 5 — the editor over MCP                      (done)
@@ -112,8 +113,8 @@ testdata/         the media corpus description (files are not committed)
   what the decoder deliberately does not convert, and the one decision M2 cannot start
   without.
 * [`docs/COVERAGE.md`](docs/COVERAGE.md) — the Fase II catalogue audited against what the
-  engine actually does: 130 items, 33 reachable today, and what to build in what order.
-* [`docs/MCP.md`](docs/MCP.md) — the agent's door into the editor: forty-five tools, five
+  engine actually does: 130 items, 38 reachable today, and what to build in what order.
+* [`docs/MCP.md`](docs/MCP.md) — the agent's door into the editor: 51 tools, five
   resources, three prompts, the guarantees, and what is deliberately not exposed.
 * [`docs/UI.md`](docs/UI.md) — the person's door into the same log: the intentions, the
   keyboard, the two languages, the preferences, the parity with the agent's tools, and the

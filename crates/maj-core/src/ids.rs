@@ -49,6 +49,7 @@ define_entity_id!(ClipId, "clip", "clip");
 define_entity_id!(EffectId, "effect", "effect");
 define_entity_id!(MaskId, "mask", "mask");
 define_entity_id!(TransitionId, "transition", "transition");
+define_entity_id!(MarkerId, "marker", "marker");
 
 /// Hands out fresh identifiers for entities about to be created.
 ///
@@ -122,6 +123,11 @@ impl IdAllocator {
     /// Allocates a transition identifier.
     pub fn transition(&mut self) -> TransitionId {
         TransitionId::new(self.take())
+    }
+
+    /// Allocates a marker identifier.
+    pub fn marker(&mut self) -> MarkerId {
+        MarkerId::new(self.take())
     }
 
     fn take(&mut self) -> u64 {

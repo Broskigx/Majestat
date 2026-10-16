@@ -886,7 +886,8 @@ mod tests {
 
     #[test]
     fn a_saved_project_reopens_with_the_same_document_hash() {
-        let directory = std::env::temp_dir().join("maj-mcp-session-tests");
+        let directory =
+            std::env::temp_dir().join(format!("maj-mcp-session-tests-{}", std::process::id()));
         std::fs::create_dir_all(&directory).expect("a scratch directory");
         let path = directory.join("session.maj");
         let mut session = populated();

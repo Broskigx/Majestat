@@ -14,8 +14,8 @@ determinism, the undo, the diff and the attribution are all fiction.
 * Crate: `crates/maj-ui` (layer 6, next to `maj-cli` and `maj-script`)
 * Window: `crates/maj-win32`, running as the `majestat` binary — the shell in a window,
   written directly against the Win32 API ([ADR 0013](adr/0013-the-window-is-written-against-win32.md))
-* Surface: **77 intentions**, **30 command names**, **67 default strokes**, **199 strings in
-  two languages**, seven pages, seven menus, three preview resolutions
+* Surface: **80 intentions**, **36 command names**, **70 strokes**, **199 keys in two
+  languages**, seven pages, seven menus, three preview resolutions
 * Modules: `action` (intentions), `app` (the shell), `keys` (strokes), `i18n` (English and
   Spanish), `prefs` (the file)
 
@@ -126,10 +126,19 @@ a table, and the table is data:
 | `shift` + `delete` | ripple delete: remove the selected clip and close the gap it leaves |
 | `alt` + `,` / `alt` + `.` | the previous / the next keyframe of the selected clip |
 | `alt` + `k`, `shift` + `alt` + `k` | key every channel that is already animated at the playhead, or take those keys away; clear every curve |
+| `m`, `shift` + `m`, `alt` + `m` | mark the playhead with a note, take the marker under it away, walk the marker's colour through the eight |
 
-Sixty-seven strokes, and three properties of the table are checked rather than trusted: no two
+Seventy strokes, and three properties of the table are checked rather than trusted: no two
 strokes collide, an unbound stroke is silent rather than wrong, and a stroke that is absent
 on purpose stays absent.
+
+The marker keys are the two conventions an editor arrives with rather than an invention: `m`
+places a mark, which is what Premiere and Resolve both use, `shift`+`m` takes one away instead
+of placing a second on the same frame, and `alt` cycles — which is what every other cycling
+key in this table does with `alt`. A marker's name is the playhead's own timecode, because
+that is the one thing the interface can call it without inventing language: it says where the
+note is, and it reads the same in both languages. The note is whatever the caller has to say,
+and a marker with neither a name nor a note is refused rather than clutter a timeline.
 
 The transport is the one place where an earlier deliberate absence was **reversed by a
 measurement rather than by taste**. The table used to have no `space` and no `j`/`k`/`l`, on
@@ -147,7 +156,7 @@ appends nothing to the log, because where the playhead is is view state.
 
 The interface speaks English and Spanish, and it did so from the first string rather than
 after the fact, because retrofitting translation means finding every literal in a codebase
-that has grown comfortable with them. Seventy-six keys, two tables, one lookup:
+that has grown comfortable with them. 199 keys, two tables, one lookup:
 
 ```rust
 let label = text(shell.lang(), Key::PaletteClose);
@@ -164,7 +173,7 @@ the brand directory still holds the owner's raster rather than a drawn word.
 
 ## The palette is the agent's catalogue in a person's hands
 
-The palette's rows are the **MCP tool catalogue** — the same forty-five tools an agent has —
+The palette's rows are the **MCP tool catalogue** — the same fifty-one tools an agent has —
 and the chosen one runs against the session the person is already holding:
 
 ```rust
@@ -196,6 +205,26 @@ compares:
 * the **document hash** is deliberately *not* equal, because it covers the log and the log
   records who made each edit. Two hands that make the same edit produce the same project and
   a different attribution, which is exactly what a shared door has to be able to show.
+
+## The journal beside the document
+
+An edit reaches the log and then the journal: opening a document starts autosaving to
+`<document>.maj.journal`, every group the shell applies is appended to it as one entry, and
+saving the document empties it, because the work is in the file it belongs to. Saving as
+moves the journal to the new document's side and empties it for the same reason.
+
+It lives on the shell rather than in the window because the shell is where both halves of an
+entry are known: a group of commands and the hash of the document it is about to be applied
+to. That hash is what tells a recovery "this edit has not happened yet" from "this edit is
+already in the document" — an entry written against a revision that no longer matches is
+skipped, never applied twice. `maj recover` replays a journal onto a document and reports
+what it did, how many commands it applied and where it stopped.
+
+A journal that cannot be written is reported as an error on the status line and **the edit
+stands**: refusing the edit would lose the work in order to protect the copy of it, and
+saying nothing would hide a hole in the net. `docs/PROJECT-FORMAT.md` describes the file
+itself, and the gate it has to pass is that a recovery and a clean replay of the same
+commands produce the same `document_hash`.
 
 ## The viewer and the exporter
 
@@ -249,7 +278,7 @@ control whose model does not.
 Every label and every name in the frame comes from the shell, in the shell's current language;
 the window's only opinions are pixel positions and the palette. The keyboard is exactly the
 table above — there is no second keymap, and a test walks the shell's table and requires that
-every one of its sixty-seven strokes has a key on this window that produces it. The status line
+every one of its seventy strokes has a key on this window that produces it. The status line
 shows the shell's own line, the transport's measured rate, and in red the last refusal in
 whatever words the engine used.
 
@@ -434,12 +463,12 @@ not all here.
 
 ## Verified evidence
 
-Run on Windows, Rust 1.99, GNU toolchain, no C compiler:
+Run on Windows, Rust 1.99, GNU toolchain. 2026-10-16, at P1:
 
 ```
 cargo fmt --all -- --check                                  exit 0
 cargo clippy --workspace --all-targets -- -D warnings        exit 0   (whole workspace, all targets)
-cargo test --workspace                                      exit 0   539 tests, 53 test targets
+cargo test --workspace --no-fail-fast                        exit 0   579 tests, 54 test targets
 cargo doc --workspace --no-deps                             exit 0   no warnings
 
 cargo run -p maj-win32 --bin majestat -- --self-check          exit 0
@@ -451,11 +480,12 @@ cargo run -p maj-win32 --bin majestat -- --bench 300           exit 0, 39 zones
 
 | Suite | Count | What it holds |
 |---|---|---|
-| `maj-win32` unit tests | 11 | Every stroke in the shell's table can be typed on the window; no key reaches nothing; the modifiers land on the right bindings; a key with no stroke is silent; every zone the paint registers is inside the window; the same geometry answers a hit test and a hover; every glyph and every toolbar button carries a picture and a name; the layout puts every panel inside the client area; and the logo's emblem crop and its generated seal are what they claim to be |
+| `maj-win32` unit tests | 14 | Every stroke in the shell's table can be typed on the window; no key reaches nothing; the modifiers land on the right bindings; a key with no stroke is silent; every zone the paint registers is inside the window; the same geometry answers a hit test and a hover; every glyph and every toolbar button carries a picture and a name; the layout puts every panel inside the client area; and the logo's emblem crop and its generated seal are what they claim to be |
 | `maj-render` unit tests | 88 | The sources: a chart that is a function of its seed and frame, the PPM and PNG readers and their refusals, the title — its strokes, its four faces, its accents, its alignment, and the alpha that lets it compose over a shot — and media that cannot be read: one policy over every way it can happen, a placeholder that says which of `offline`, `damaged` and `undecodable` applies and keeps the engine's own sentence, a delivery mode that refuses instead, and the placeholder's hazard bands agreeing between a whole and a tiled render |
 | `maj-ui` unit tests | 47 | The shell: the example document, the playhead's bounds, zoom, drafts, the palette's arguments, the status line in both languages, the binding table's collisions and its deliberate absences, the views and pages, the preference file's repairs, an export |
-| `maj-ui` `tests/model.rs` | 21 | Every intention becomes the command it names; one of every command kind is spelled as the document spells it; the state is still a function of the log after the interface drove it; one intention is one undo step however many commands it is, and one press takes the whole of it back; a split covers what the clip did; a copy carries the look; a trim beyond the media is the engine's refusal; the draft changes the requested size; the viewer and the exporter agree on the pixels; adding a title is an asset and a clip and nothing more, and importing a still places nothing |
+| `maj-ui` `tests/model.rs` | 24 | Every intention becomes the command it names; one of every command kind is spelled as the document spells it; the state is still a function of the log after the interface drove it; one intention is one undo step however many commands it is, and one press takes the whole of it back; a split covers what the clip did; a copy carries the look; a trim beyond the media is the engine's refusal; the draft changes the requested size; the viewer and the exporter agree on the pixels; adding a title is an asset and a clip and nothing more, and importing a still places nothing |
 | `maj-ui` `tests/interfaces.rs` | 4 | Command-for-command parity with the agent's tools; the same edit by two hands is the same state hash and a different document hash; the author of everything the interface applies; the palette driving the agent's tools against the person's session |
+| `maj-ui` `tests/docs.rs` | 4 | The numbers four documents claim — the tool count in `MCP.md`, `COVERAGE.md` and `README.md`, the command kinds in `COVERAGE.md`, the strokes in `UI.md` — read out of the code they are claims about, so a count typed into three files cannot go stale in one of them |
 
 See [ADR 0012](adr/0012-the-interface-emits-commands.md) for why the interface is shaped this
 way, [`docs/MCP.md`](MCP.md) for the other door into the same log, and

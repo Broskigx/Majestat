@@ -26,6 +26,18 @@
 //!   `forbid`. That relaxes a workspace-wide lint, so it needs an ADR of its own weight
 //!   and is deliberately not decided in a module comment. See `docs/MEDIA.md` §8.
 
+//!
+//! What *is* here, since P1: [`mod@measure`], which hashes a file and finds it again by hash.
+//! That needs no decoder, and it is what lets a project survive a drive letter changing.
+//! The probe, the demuxer and the decoder are still to come.
+
+pub mod measure;
+
+pub use measure::{
+    Found, Measurement, MediaError, Search, Wanted, find_by_hash, measure, measure_uri, uri_of,
+    url_to_path,
+};
+
 /// Human-readable statement of this crate's responsibility.
 pub const ROLE: &str = "media I/O: probe, demux, decode, seek, waveforms, thumbnails";
 

@@ -38,7 +38,7 @@ pub(crate) enum Tool {
     Remove,
     /// Duplicate the selection.
     Duplicate,
-    /// Drop a marker at the playhead, which the model cannot hold yet.
+    /// Drop a marker at the playhead, in the first of the eight colours.
     Marker,
     /// Trim the head to the playhead.
     TrimIn,
@@ -176,9 +176,10 @@ impl Tool {
             // Fit has no stroke of its own; it is one press of the zoom-out ladder away, and it
             // is in the View menu, which the keyboard can open.
             Self::ZoomFit => None,
-            // A marker is not a stroke, and it would refuse even if it were: the model has no
-            // marker entity until M6.
-            Self::Marker => None,
+            // The marker tool used to be the one button with no stroke, because the model had
+            // no marker entity for it to place; it has one now, and `m` is the key Premiere
+            // and Resolve both use for it.
+            Self::Marker => Some(Binding::AddMarker),
         }
     }
 
@@ -191,6 +192,7 @@ impl Tool {
             Self::Split => Some("s"),
             Self::Remove => Some("supr"),
             Self::Duplicate => Some("ctrl+d"),
+            Self::Marker => Some("m"),
             Self::TrimIn => Some("["),
             Self::TrimOut => Some("]"),
             Self::ZoomIn => Some("+"),

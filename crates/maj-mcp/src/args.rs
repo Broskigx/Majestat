@@ -247,6 +247,11 @@ impl Decoder<'_> {
                 Ok(Value::Array(out))
             }
             FieldKind::Object(shape) => self.entity(shape, value, field.name),
+            FieldKind::OptionalObject(shape) => match value {
+                // Null is the answer, not the absence of one.
+                Value::Null => Ok(Value::Null),
+                present => self.entity(shape, present, field.name),
+            },
             FieldKind::List(shape) => {
                 let Value::Array(items) = value else {
                     return Err(ArgError::invalid(field.name, "expected a list"));

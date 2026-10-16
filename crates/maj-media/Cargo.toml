@@ -12,3 +12,7 @@ workspace = true
 [dependencies]
 maj-time.workspace = true
 maj-core.workspace = true
+# The identity of a file's bytes. Already in the tree for `maj-core`'s document hashes, so
+# this adds a user rather than a dependency: same version, same `pure` features. See
+# docs/LICENSING.md.
+blake3.workspace = true
