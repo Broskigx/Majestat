@@ -187,6 +187,8 @@ fn dispatch(session: &mut Session, tool: &Tool, args: &Map<String, Value>) -> Ou
         "maj_new_project" => reset(session, args),
         "maj_save_project" => save(session, args),
         "maj_replay_check" => replay_check(session),
+        "maj_ripple" | "maj_roll" | "maj_slip" | "maj_slide" | "maj_close_gap"
+        | "maj_insert_blank" => editorial(session, tool.name, args),
         "maj_place_clip" => place_clip(session, args),
         "maj_setup_sequence" => setup_sequence(session, args),
         "maj_render_frame" => render(session, args),
@@ -1016,6 +1018,98 @@ fn boolean_arg(args: &Map<String, Value>, key: &str, default: bool) -> Result<bo
     }
 }
 
+/// Runs one of the editorial operations, which compose commands rather than being one.
+///
+/// Every one of them is a pure function in `maj-timeline` from the project to a list of
+/// commands, so the list is composed first and applied as **one group**: the whole operation
+/// is one undo step, and a refusal part-way through puts everything back. That is why these
+/// are tools without a `command` — there is no single command they map to, and inventing one
+/// would give the log two ways to say the same thing.
+fn editorial(session: &mut Session, name: &str, args: &Map<String, Value>) -> Outcome {
+    let sequence = match sequence_arg(session.project(), args) {
+        Ok(sequence) => sequence,
+        Err(message) => return Outcome::error(message),
+    };
+
+    let composed = match name {
+        "maj_close_gap" | "maj_insert_blank" => {
+            let track = match identifier_arg(args, "track") {
+                Ok(track) => maj_core::TrackId::new(track),
+                Err(message) => return Outcome::error(message),
+            };
+            let at = match integer_arg(args, "at", 0) {
+                Ok(at) => at,
+                Err(message) => return Outcome::error(message),
+            };
+            if name == "maj_close_gap" {
+                maj_timeline::close_gap(session.project(), sequence, track, at)
+            } else {
+                let length = match integer_arg(args, "length", 0) {
+                    Ok(length) => length,
+                    Err(message) => return Outcome::error(message),
+                };
+                maj_timeline::insert_blank(session.project(), sequence, track, at, length)
+            }
+        }
+        _ => {
+            let clip = match identifier_arg(args, "clip") {
+                Ok(clip) => maj_core::ClipId::new(clip),
+                Err(message) => return Outcome::error(message),
+            };
+            let by = match integer_arg(args, "by", 0) {
+                Ok(by) => by,
+                Err(message) => return Outcome::error(message),
+            };
+            match name {
+                "maj_slip" => maj_timeline::slip(session.project(), sequence, clip, by),
+                "maj_slide" => maj_timeline::slide(session.project(), sequence, clip, by),
+                _ => {
+                    let edge = match args.get("edge").and_then(Value::as_str) {
+                        Some(text) => match maj_timeline::Edge::from_key(text) {
+                            Some(edge) => edge,
+                            None => {
+                                return Outcome::error(format!(
+                                    "`edge` must be `head` or `tail`, not `{text}`"
+                                ));
+                            }
+                        },
+                        None => return Outcome::error("`edge` is required"),
+                    };
+                    if name == "maj_roll" {
+                        maj_timeline::roll(session.project(), sequence, clip, edge, by)
+                    } else {
+                        maj_timeline::ripple(session.project(), sequence, clip, edge, by)
+                    }
+                }
+            }
+        }
+    };
+
+    let commands = match composed {
+        Ok(commands) => commands,
+        // The engine's own sentence, which already names what is wrong and often what would
+        // have worked instead.
+        Err(error) => return Outcome::error(error.to_string()),
+    };
+    if commands.is_empty() {
+        return Outcome::text("nothing to do: that leaves everything where it is");
+    }
+    let count = commands.len();
+    let kinds: Vec<&'static str> = commands.iter().map(maj_core::Command::kind).collect();
+    match session.apply_group(commands) {
+        Ok(revision) => Outcome::text(format!(
+            "{} composed {count} command(s) — {} — as one step · revision {revision}",
+            name.trim_start_matches("maj_"),
+            kinds.join(", ")
+        ))
+        .structured(json!({
+            "revision": revision,
+            "commands": kinds,
+            "sequence": sequence.raw(),
+        })),
+        Err(error) => Outcome::error(error.to_string()),
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -409,3 +409,69 @@ fn the_catalogue_can_be_printed_without_starting_a_server() {
     // Standard error is where a person's messages go, and it is empty for this flag.
     assert!(output.stderr.is_empty(), "{:?}", output.stderr);
 }
+
+#[test]
+fn an_editorial_operation_is_one_step_over_the_wire_and_undoes_as_one() {
+    // The claim the editorial tools rest on: they are not commands, they *compose* commands,
+    // and an agent gets the whole composition as one undoable step. Driven over the wire
+    // rather than against the library, because that is the surface a model actually sees.
+    let mut wire = Wire::ready();
+    wire.ok(
+        "maj_setup_sequence",
+        json!({"name": "Reel A", "timebase": "25", "width": 1920, "height": 1080,
+               "tracks": ["video"]}),
+    );
+    wire.ok(
+        "maj_create_media_asset",
+        json!({"asset": {"name": "shot", "uri": "generated:a", "timebase": "25",
+                         "duration_frames": 10_000}}),
+    );
+    for start in [0, 100, 200] {
+        wire.ok(
+            "maj_place_clip",
+            json!({"kind": "video", "asset": 3, "source_range": [0, 100],
+                   "timeline_start": start}),
+        );
+    }
+    let before = wire.ok("maj_project_state", json!({}))["digests"]["state"].clone();
+    assert!(before.is_string(), "a state hash to compare against");
+
+    // A ripple on the first clip's tail: it grows, and both clips after it move.
+    let rippled = wire.ok("maj_ripple", json!({"clip": 4, "edge": "tail", "by": 25}));
+    assert_eq!(
+        rippled["commands"],
+        json!(["trim_clip", "move_clip", "move_clip"]),
+        "the answer names the commands it composed"
+    );
+
+    let timeline = wire.call("maj_timeline", json!({}));
+    let said = timeline["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        said.contains("325 frames"),
+        "the sequence is twenty-five frames longer: {said}"
+    );
+
+    // One undo, not three: the whole operation is one thing the person did.
+    let undone = wire.ok("maj_undo", json!({"count": 1}));
+    assert_eq!(undone["reverted"], json!(1));
+    assert_eq!(
+        wire.ok("maj_project_state", json!({}))["digests"]["state"],
+        before,
+        "one undo put the whole ripple back"
+    );
+
+    // And a refusal names what is wrong without touching the document.
+    let refused = wire.call("maj_roll", json!({"clip": 4, "edge": "head", "by": 5}));
+    assert_eq!(refused["result"]["isError"], json!(true));
+    let message = refused["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(message.contains("head side"), "{message}");
+    assert_eq!(
+        wire.ok("maj_project_state", json!({}))["digests"]["state"],
+        before,
+        "a refused operation appends nothing"
+    );
+}

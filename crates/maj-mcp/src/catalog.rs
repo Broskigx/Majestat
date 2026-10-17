@@ -271,6 +271,22 @@ const SEQUENCE_REF: Field = Field::id("sequence", "sequence", "The sequence to r
 /// The clip a command changes.
 const CLIP: Field = Field::id("clip", "clip", "The clip to change.");
 
+/// Which end of a clip an editorial operation works on.
+const EDGE: Field = Field::required(
+    "edge",
+    FieldKind::Names(&["head", "tail"]),
+    "Which end to move: `head` is the clip's in point, `tail` is past its out point.",
+);
+
+/// How far an editorial operation moves something, in timeline frames.
+const BY: Field = Field::required(
+    "by",
+    FieldKind::Integer,
+    "How far to move, in timeline frames; positive is later. Zero appends nothing. An \
+     amount that is not a whole number of source frames at the clip's speed is refused \
+     rather than rounded, because rounding is how an edit drifts a frame per adjustment.",
+);
+
 /// A track of the sequence.
 const TRACK: Field = Field::id("track", "track", "The track to change.");
 
@@ -1521,6 +1537,112 @@ pub static TOOLS: &[Tool] = &[
         example: r#"{}"#,
     },
     // ---- helpers ----
+    Tool {
+        name: "maj_ripple",
+        title: "Ripple trim",
+        description: "Move one edge of a clip and push everything after it on that track by \
+                      the same amount, so no gap appears and the sequence gets longer or \
+                      shorter. This is the trim an editor means by `ripple`. Moving the head \
+                      takes frames off the front — the clip's in point moves with it, so the \
+                      clip does not slide over its source. `by` is in timeline frames and \
+                      positive is later. It composes into one `trim_clip` and one `move_clip` \
+                      per clip after it, appended as a single undoable step; a refusal \
+                      appends nothing at all.",
+        fields: &[SESSION, SEQUENCE, CLIP, EDGE, BY],
+        command: None,
+        read_only: false,
+        destructive: false,
+        example: r#"{"sequence":1,"clip":4,"edge":"tail","by":12}"#,
+    },
+    Tool {
+        name: "maj_roll",
+        title: "Roll the cut",
+        description: "Move the cut between a clip and its neighbour: one clip gains exactly \
+                      what the other loses. Nothing after the pair moves and the sequence's \
+                      duration does not change, which is what separates a roll from a ripple. \
+                      It composes into two `trim_clip`s. Refused when there is no clip on the \
+                      other side of that cut, or when either clip would run out of source or \
+                      be left with no frames.",
+        fields: &[SESSION, SEQUENCE, CLIP, EDGE, BY],
+        command: None,
+        read_only: false,
+        destructive: false,
+        example: r#"{"sequence":1,"clip":4,"edge":"tail","by":-6}"#,
+    },
+    Tool {
+        name: "maj_slip",
+        title: "Slip the source",
+        description: "Change which part of the source a clip shows without moving it or \
+                      changing its length: the window slides through the media. Nothing else \
+                      on the timeline is touched, which makes this the safe way to fix a \
+                      performance inside a cut that is already timed. It composes into one \
+                      `trim_clip`.",
+        fields: &[SESSION, SEQUENCE, CLIP, BY],
+        command: None,
+        read_only: false,
+        destructive: false,
+        example: r#"{"sequence":1,"clip":4,"by":5}"#,
+    },
+    Tool {
+        name: "maj_slide",
+        title: "Slide the clip",
+        description: "Move a clip along the timeline and let its neighbours absorb the move: \
+                      the clip before it gives up or gains frames at its tail, the one after \
+                      it at its head. The clip keeps its own source and length and the \
+                      sequence's duration is unchanged. Needs a clip on both sides.",
+        fields: &[SESSION, SEQUENCE, CLIP, BY],
+        command: None,
+        read_only: false,
+        destructive: false,
+        example: r#"{"sequence":1,"clip":4,"by":10}"#,
+    },
+    Tool {
+        name: "maj_close_gap",
+        title: "Close a gap",
+        description: "Pull everything after a gap back to close it. `at` is any frame inside \
+                      the gap; a frame a clip covers is refused rather than guessed at, \
+                      because which nearby gap was meant is not something to assume.",
+        fields: &[
+            SESSION,
+            SEQUENCE,
+            Field::id("track", "track", "The track with the gap."),
+            Field::required(
+                "at",
+                FieldKind::Integer,
+                "Any timeline frame inside the gap.",
+            ),
+        ],
+        command: None,
+        read_only: false,
+        destructive: false,
+        example: r#"{"sequence":1,"track":2,"at":240}"#,
+    },
+    Tool {
+        name: "maj_insert_blank",
+        title: "Insert blank space",
+        description: "Push everything from a frame onwards later, leaving empty space behind. \
+                      The counterpart of closing a gap, and what makes room for a shot that \
+                      has not arrived yet.",
+        fields: &[
+            SESSION,
+            SEQUENCE,
+            Field::id("track", "track", "The track to open up."),
+            Field::required(
+                "at",
+                FieldKind::Integer,
+                "The first timeline frame that moves.",
+            ),
+            Field::required(
+                "length",
+                FieldKind::Integer,
+                "How many frames of space to make.",
+            ),
+        ],
+        command: None,
+        read_only: false,
+        destructive: false,
+        example: r#"{"sequence":1,"track":2,"at":100,"length":48}"#,
+    },
     Tool {
         name: "maj_place_clip",
         title: "Place media on a track",

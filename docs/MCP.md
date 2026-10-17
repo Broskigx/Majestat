@@ -13,7 +13,7 @@ command came from a keyboard or from a model.
 * Crate: `crates/maj-mcp` (layer 5, alongside `maj-export` and `maj-agent`)
 * Binary: `maj-mcp`, also reachable as `maj mcp`
 * Transport: JSON-RPC 2.0 over stdio, one message per line
-* Surface: **51 tools, 5 resources, 3 resource templates, 3 prompts**
+* Surface: **57 tools, 5 resources, 3 resource templates, 3 prompts**
 
 ## Running it
 
@@ -37,7 +37,7 @@ maj mcp --project reel-a.maj               # the same server, from the headless 
 The banner goes to **stderr**, so it never corrupts the protocol stream:
 
 ```
-maj-mcp 0.0.1 — 51 tools, 5 resources, 3 prompts on stdio
+maj-mcp 0.0.1 — 57 tools, 5 resources, 3 prompts on stdio
 ```
 
 ## Connecting a client
@@ -140,6 +140,56 @@ model defines, name for name, so the surface cannot drift from the engine.
 | `maj_move_clip` | Move a clip to a new timeline position. |
 | `maj_reparent_clip` | Move a clip to another track and position. |
 
+
+### Editorial operations
+
+The four trims an editor actually works with, plus the two gap operations. Each takes `by`
+in **timeline** frames, positive is later.
+
+| Tool | What moves | What does not |
+|---|---|---|
+| `maj_ripple` | One edge, and every clip after it on that track | The rest of the clip's source; the sequence gets longer or shorter |
+| `maj_roll` | The cut between two clips: one gains what the other loses | The sequence's duration, and every other clip |
+| `maj_slip` | Which part of the source a clip shows | Where the clip sits, and how long it is |
+| `maj_slide` | Where a clip sits; its neighbours' edges absorb the move | The sequence's duration, and the clip's own source |
+| `maj_close_gap` | Everything after a gap, pulled back | Everything before it |
+| `maj_insert_blank` | Everything from a frame onwards, pushed later | Everything before it |
+
+**These are the only tools that are not one command**, and the exception is deliberate.
+Each is a pure function in `maj-timeline` from the project to a list of commands, applied as
+**one group**: the whole operation is a single undo step, and a refusal part-way through
+puts everything back. A `ripple` command would have been easier and wrong — the log would
+gain a second way to say what `trim_clip` and `move_clip` already say, so two projects that
+made the same edit could hold different commands, a diff would show a shape rather than a
+change, and replay would have to know both.
+
+The result names the commands it composed, so an agent can see what it actually appended:
+
+```
+ripple composed 3 command(s) — trim_clip, move_clip, move_clip — as one step · revision 9
+```
+
+**What is refused rather than rounded.** An edge moved by `n` timeline frames moves
+`n × speed` source frames. When a clip has been retimed, that product can fall between two
+source frames, and there is no honest answer to which one — so the tool refuses and names
+the speed:
+
+```
+3 timeline frame(s) at speed 1/2 is not a whole number of source frames, and rounding it
+would drift
+```
+
+That is the engine's discipline applied where it is least convenient. A retimed clip can
+still be rippled by a multiple of its denominator; rounding silently is how an edit drifts a
+frame per adjustment, which is the defect this engine exists to make impossible.
+
+Also refused, each in its own words: a roll or a slide with no clip on the other side of the
+cut, a trim that would leave a clip with no frames at all (remove it instead), a slip whose
+window would leave the media, and a `close_gap` at a frame a clip covers — because which
+nearby gap was meant is not something to guess.
+
+A move of zero appends **nothing**: a drag that ends where it started does not move the
+revision.
 ### Clip properties
 
 `maj_set_clip_enabled`, `maj_set_clip_opacity`, `maj_set_clip_blend`,
@@ -302,7 +352,7 @@ What is exposed today, and what is deliberately not.
 
 | Area | Status |
 |---|---|
-| The command surface — structure, media, clips, properties, effects, masks, transitions, markers, colour keys, undo and redo | **Exposed.** 38 of the 51 tools append commands, one command per change. |
+| The command surface — structure, media, clips, properties, effects, masks, transitions, markers, colour keys, undo and redo | **Exposed.** 36 tools append exactly one command each — every command kind the log has, name for name. The six editorial operations above are the deliberate exception: they append several commands as a single step. |
 | Rendering and verification — frame render with the image, whole-vs-tiled verification, frame export with manifests | **Exposed.** The agent looks at its own work. |
 | Sessions — several named projects in one server, open, save, new | **Exposed.** Nothing is written to disk except on `maj_save_project` and `maj_export_frame`. |
 | Reading — project state, timeline, clip detail, log, replay check | **Exposed** as tools and as resources. |

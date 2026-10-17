@@ -13,7 +13,7 @@ capabilities then fall out of one arrangement instead of being bolted on:
   `maj render --verify` will prove it rather than assert it.
 * **An agent that really edits** — the Pilot (M11) drives the same typed commands the UI
   does, so its work is undoable, reviewable and diffable. The Model Context Protocol
-  server that exposes them is already here: `maj-mcp`, 51 tools over one log.
+  server that exposes them is already here: `maj-mcp`, 57 tools over one log.
 * **Realtime collaboration** — syncing semantic commands is tractable; there is no opaque
   binary blob to lock (M12).
 * **Verifiable cloud rendering** — a remote render is checked by hash instead of trusted
@@ -114,7 +114,7 @@ testdata/         the media corpus description (files are not committed)
   without.
 * [`docs/COVERAGE.md`](docs/COVERAGE.md) — the Fase II catalogue audited against what the
   engine actually does: 130 items, 38 reachable today, and what to build in what order.
-* [`docs/MCP.md`](docs/MCP.md) — the agent's door into the editor: 51 tools, five
+* [`docs/MCP.md`](docs/MCP.md) — the agent's door into the editor: 57 tools, five
   resources, three prompts, the guarantees, and what is deliberately not exposed.
 * [`docs/UI.md`](docs/UI.md) — the person's door into the same log: the intentions, the
   keyboard, the two languages, the preferences, the parity with the agent's tools, and the

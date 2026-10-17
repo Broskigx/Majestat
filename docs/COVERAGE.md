@@ -18,7 +18,7 @@ Verified with `maj mcp --list-tools`, the command tests and `cargo test --worksp
 | Thing | What is there |
 |---|---|
 | Interfaces | `maj render`, `verify`, `probe`, `bench`, `edit`, `mcp` |
-| MCP | 51 tools, 5 resources, 3 templates, 3 prompts, `--read-only`, stdio JSON-RPC 2.0 |
+| MCP | 57 tools, 5 resources, 3 templates, 3 prompts, `--read-only`, stdio JSON-RPC 2.0 |
 | Commands | 36 tags in `Command`, one tool each, checked against `serde` by test |
 | Document | a start timecode per sequence, a BLAKE3 fingerprint per asset with a `verified` flag, markers carrying their own author and colour, and an autosave journal beside the document that `maj recover` replays |
 | Renderer | scene-linear `f32` picture, tiled and whole renders agree bit for bit |
@@ -82,8 +82,8 @@ Nothing in the catalogue is marked NOW merely because it sounds like an effect t
 | 2.2 | Drag constrained to one axis | PART — `maj_move_clip` (time) and `maj_reparent_clip` (track) are the two axes |
 | 2.3 | Unlink / link audio and video | ENGINE (`maj-core`: clips are independent, so there is no link to break — a link group is a model feature, not a composition) |
 | 2.4 | Make subclip | PART — an asset plus a `source_range` on a new clip is a subclip |
-| 2.5 | Insert blank space | PART — a `solid:` clip as filler; no dedicated command |
-| 2.6 | Close gap across the sequence | PART — one `maj_move_clip` of the later clip onto the earlier clip's tail; the shell composes exactly that, and refuses when the two already touch or overlap |
+| 2.5 | Insert blank space | NOW — `maj_insert_blank` pushes everything from a frame onwards later on a track, as one undoable step |
+| 2.6 | Close gap across the sequence | PART — `maj_close_gap` pulls everything after a gap back on one track in one undoable step; closing the same gap on a picture track and its sound is a loop the client makes, and a frame a clip covers is refused rather than guessed at |
 | 2.7 | Duplicate a sequence | ENGINE (`maj-core`: no deep copy) |
 | 2.8 | Reverse playback | ENGINE — `SetClipSpeed` refuses speed ≤ 0 (verified in `command.rs`) |
 | 2.9 | Freeze frame | PART — a still asset trimmed to a duration |
@@ -96,7 +96,7 @@ Nothing in the catalogue is marked NOW merely because it sounds like an effect t
 | 2.16 | Alt-drag copy | NOW — `maj_place_clip` / `maj_insert_clip` at another index |
 | 2.17 | Three-point editing | ENGINE — three-point editing is a *rule* over a source range and a record range, and no rule is enforced: an agent can trim and insert, but nothing refuses the edit that contradicts the in/out points it set |
 | 2.18 | Four-point editing with speed fit | ENGINE — the same, and the speed fit that a four-point edit needs to reconcile two durations does not exist either |
-| 2.19 | Ripple trim frame by frame | PART — `maj_trim_clip` is exact frame arithmetic and the shell's ripple operations compose `TrimClip` with `MoveClip`; there is no single ripple-trim command, and the keyboard is the client's |
+| 2.19 | Ripple trim frame by frame | NOW — `maj_ripple` moves one edge and every clip after it by exact frame arithmetic, `maj_roll` moves a cut, `maj_slip` and `maj_slide` move the window and the clip; each composes `trim_clip`/`move_clip` into one undoable step. There is deliberately no ripple *command*, and a retimed clip is refused rather than rounded |
 | 2.20 | Trim clamped to the source's own limits | NOW — `a_trim_beyond_the_media_is_rejected` enforces it |
 
 ## 3. Composition and VFX — 20 items
@@ -202,8 +202,8 @@ renders nothing.
 
 | Status | Items |
 |---|---|
-| NOW — an advertised tool does it | 6 |
-| PART — by composing tools, or with a named limit | 32 |
+| NOW — an advertised tool does it | 8 |
+| PART — by composing tools, or with a named limit | 30 |
 | ENGINE / M13 — the engine must grow it | 57 |
 | OUT — decode farm, GPU, DAW or UI | 35 |
 | **Total** | **130** |
@@ -227,8 +227,10 @@ Each of these removes a whole cluster of the table above, rather than one row:
    with them.)
 4. **Speed as an animatable channel, and negative speed.** 2.8 and 2.10 together; the channel
    animation machinery already exists for six channels.
-5. **Structural editing commands in `maj-core`:** `close_gap`, `insert_blank`, `duplicate`
-   (sequence and clip), and a per-clip `copy_grade`. Clears 2.5–2.7, 2.17–2.18, 4.10, 4.13.
+5. **The rest of the structural operations.** `close_gap` and `insert_blank` landed as
+   *compositions* in `maj-timeline` rather than as commands, and 2.5 and 2.19 are closed by
+   them; what remains is `duplicate` (sequence and clip) and a per-clip `copy_grade`, which
+   clear 2.7, 4.10, 4.13, plus the three- and four-point rules that 2.17–2.18 need.
 6. **A media pool with tags and queries.** 1.7, 1.9, 1.17, 1.18 and the inspection half of
    1.19 — the identity half of 1.15 arrived in P1 as a fingerprint and a relink by hash.
 7. **Rich effects in `maj-render`:** per-channel operations, mask invert, per-effect opacity

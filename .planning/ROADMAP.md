@@ -80,13 +80,46 @@ unblocked thing to build once M8's headless CLI existed.
 
 | Phase | Name | Deliverable | Gate | Status |
 |---|---|---|---|---|
-| **MCP** | Agent interface over the Model Context Protocol | `maj-mcp` (layer 5): 51 tools, 5 resources, 3 templates, 3 prompts, sessions, read-only mode; `maj mcp` in the CLI | An editing session driven entirely by tool calls produces a document the command line renders to the same digest as through the server; no tool exists that is not one command; `cargo test --workspace` green | **[done]** |
+| **MCP** | Agent interface over the Model Context Protocol | `maj-mcp` (layer 5): 57 tools, 5 resources, 3 templates, 3 prompts, sessions, read-only mode; `maj mcp` in the CLI | An editing session driven entirely by tool calls produces a document the command line renders to the same digest as through the server; no tool exists that is not one command; `cargo test --workspace` green | **[done]** |
 
 Acceptance evidence is in `STATE.md`; the surface, the guarantees and what is deliberately
-not exposed are in [`docs/MCP.md`](../docs/MCP.md); the decision is ADR 0011. The
-130-item Fase II catalogue is audited against that surface in
+not exposed are in [`docs/MCP.md`](../docs/MCP.md); the decision is ADR 0011.The 130-item Fase II catalogue is audited against that surface in
 [`docs/COVERAGE.md`](../docs/COVERAGE.md) — 38 items reachable today, 57 that need the
 engine to grow, 35 outside a certified picture engine.
+
+## Added: M6m, in part — the editorial operations
+
+The first half of the model's half of editing, and the half that decides what shape the rest
+of it has. `crates/maj-timeline` (layer 5) holds **`ripple`, `roll`, `slip`, `slide`,
+`close_gap` and `insert_blank`** as **pure functions from a project to a list of commands it
+has not applied**, and `maj-mcp` exposes each as one tool that applies the whole list as a
+single group.
+
+| Item | Deliverable | Gate | Status |
+|---|---|---|---|
+| **M6m.1** | The six operations as pure functions in `maj-timeline`; six tools that apply each as one group; `docs/MCP.md`'s section on them; the count of tools that append one command, checked against the catalogue | Eleven tests in the new `tests/operations.rs` — each operation's shape, one undo taking the whole thing back, and a spread of amounts leaving no gap and no overlap — plus a refusal that names the speed rather than rounding, and one over the wire in `maj-mcp`'s protocol suite | **[done]** |
+
+**What is deliberately not a command.** A `ripple` command would have been easier and wrong:
+the log would gain a second way to say what `trim_clip` and `move_clip` already say, so two
+projects that made the same edit could hold different commands, a diff would show a shape
+rather than a change, and replay would have to know both. The vocabulary of the document is
+worth more than the convenience of a verb, so nothing in the crate touches a `Project` and
+the operations are inspectable before they happen — which is what a model approving a plan
+needs.
+
+**What is refused rather than rounded.** An edge moved by `n` timeline frames moves `n` ×
+speed source frames. On a retimed clip that product can fall between two source frames, and
+there is no honest answer to which one, so the operation refuses and names the speed. A
+retimed clip can still be rippled by a multiple of its denominator; rounding silently is how
+an edit drifts a frame per adjustment.
+
+**What M6m still owes**, and it is the majority of the phase: link groups (which change what
+a ripple *means* when picture and sound move together), `duplicate` and per-clip grade copy
+as commands, speed as a seventh animatable channel including negative, the three- and
+four-point rules enforced rather than advised, and the shell calling these functions instead
+of composing its ripples by hand in `maj-ui`.
+
+Evidence is in `STATE.md`.
 
 ## M7: the shell is built, and so is the window
 
@@ -155,7 +188,7 @@ orders it this way is that each step is the cheapest thing that unblocks the mos
 | Order | Phase | Deliverable | Gate | Crates |
 |---|---|---|---|---|
 | 1 | **P1** | The document floor | **[done]** — see above | `maj-core`, `maj-cli`, `maj-mcp` |
-| 2 | **M6m** | Editing, the model's half: `close_gap`, `insert_blank`, `duplicate`, per-clip grade copy, A/V link groups, speed as a seventh animatable channel including negative, ripple/roll/slip/slide as command groups, three- and four-point editing as **enforced rules** | Property tests over random timelines: no operation leaves a gap or an overlap, one undo takes it back, and a refused operation changes neither the state nor the document hash | `maj-core`, `maj-timeline`, `maj-ui`, `maj-mcp` |
+| 2 | **M6m** | Editing, the model's half: `close_gap`, `insert_blank`, `duplicate`, per-clip grade copy, A/V link groups, speed as a seventh animatable channel including negative, ripple/roll/slip/slide as command groups, three- and four-point editing as **enforced rules** | Property tests over random timelines: no operation leaves a gap or an overlap, one undo takes it back, and a refused operation changes neither the state nor the document hash | **[in part]** — the six composed operations are in `maj-timeline` and on the agent's surface (*Added: M6m, in part*); link groups, `duplicate`, grade copy, speed as a channel, the three-/four-point rules and the shell calling the library remain | `maj-core`, `maj-timeline`, `maj-ui`, `maj-mcp` |
 | 3 | **M-X** | Interchange: OTIO, EDL CMX3600 and FCPXML export; OTIO and EDL import | Export → import → export gives byte-identical OTIO; a 200-event EDL imports with every timecode exact under drop-frame; what cannot be represented is **refused with a named reason**, never flattened silently | `maj-timeline` (`interchange`), `maj-cli`, `maj-mcp` |
 | 4 | **M8a** | Output correctness: range and level policy, start timecode in the output, scopes as reductions over the framebuffer, a render queue, multi-channel EXR | Legal limited-range output measured by our own scope; scope values validated against reference images; a 20-job queue that resumes | `maj-export`, `maj-render`, `maj-cli` |
 | 5 | **M2a** | Media vocabulary and probe: the types, a closed `ContainerKind`, a probe over the corpus. No FFI yet | A hundred-file corpus, zero crashes; rotation, field order and variable frame rate read correctly; `kind` answers `damaged` from a cached probe | `maj-media` |

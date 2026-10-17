@@ -181,6 +181,7 @@ dependencies = [
  "maj-export",
  "maj-render",
  "maj-time",
+ "maj-timeline",
  "serde",
  "serde_json",
 ]

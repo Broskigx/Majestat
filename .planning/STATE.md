@@ -310,15 +310,25 @@ tests in `maj-core`, five in `maj-media` on measuring a file and finding it agai
 gates above, the marker intentions in `maj-ui`'s model suite, and four checks that read the
 counts four documents claim out of the code those claims are about.
 
-**One environmental hazard, seen and not explained away.** A `cargo test --workspace` run
-early in this session reported three failures in `maj-cli --test cli` (the relink gate and both
-journal gates) and one in `maj-export`'s unit tests; the immediately following full run and
-that morning's runs were green, and each of those tests passes on its own. The likeliest cause
-is **another cargo session in this same checkout**: the log recorded it waiting on the build
-directory lock, and those tests' scratch directories are named per test, so two runs of the
-same suite at once collide. No assertion was weakened. It is recorded here as the third
-sighting of that failure mode, and the reason the ultra plan puts the four lanes in separate
-git worktrees rather than one folder.
+**A false red gate, traced and then fixed at its cause.** Two `cargo test --workspace` runs
+early in this session reported failures in `maj-cli --test cli` (the relink gate and both
+journal gates), `maj-cli --test mcp` and `maj-export`'s unit tests. Every one of them passed in
+the next full run and on its own, which is the shape of a collision rather than a defect. It
+is a collision: **`cargo` takes the build directory lock for the build and releases it before
+it runs the binaries**, so two sessions in one checkout run the same test suites at the same
+time, and those tests' scratch directories were named per test and not per process — one run's
+`remove_dir_all` deletes the directory the other is still writing into. The failure text said
+so once it was read properly: `maj render` could not find a project that had been written a
+moment earlier, and the journal gate read *five* entries where the test had applied three.
+
+No assertion was weakened and no test was skipped. **The scratch directories are now unique
+per process** — in `maj-cli`'s CLI and MCP suites, `maj-core`'s format and round-trip gates,
+`maj-export`, `maj-mcp`'s four, `maj-render`'s resolver and `maj-ui`'s export, save and
+preferences tests — and the two newest suites had already been written that way. The fix was
+verified by running the whole workspace **twice at once**: both runs report 579 passed, zero
+failed targets. What remains true is that two sessions *editing* one checkout still collide on
+the files themselves, which is why the ultra plan puts the four lanes in separate git
+worktrees; that is a different problem from two sessions running the same tests.
 
 **The window's line base was re-measured and the recorded one is not reproducible.** At the M7
 gate the paint measured *whole 4.5-5.6 ms, incremental 1.3-1.5 ms* at 1440x900; today's
@@ -330,15 +340,82 @@ went from 1106 to 1230 — and part of the difference is the host rather than th
 numbers above are the baseline from here, and a claim that the paint is unchanged would need a
 measurement rather than this paragraph.
 
+## M6m, in part: the editorial operations, as compositions rather than commands
+
+The first half of the model's half of editing, and the half that decides the shape of the
+rest. `crates/maj-timeline` (layer 5) holds **`ripple`, `roll`, `slip`, `slide`, `close_gap`
+and `insert_blank`** as **pure functions from a project to a list of commands it has not
+applied**, and `maj-mcp` exposes each as one tool that composes the list and applies it as a
+single group.
+
+**It adds no commands, and that is the decision the crate rests on.** A `ripple` command
+would have been easy and wrong: the log would gain a second way to say what `trim_clip` and
+`move_clip` already say, so two projects that made the same edit could hold different
+commands, a diff would show a shape rather than a change, and replay would have to know both.
+Nothing in the crate touches a `Project`, which is also what makes an operation inspectable
+before it happens — the answer names the commands it composed (`trim_clip, move_clip,
+move_clip`), so a model can be shown the edit and asked to approve it.
+
+**A refusal rather than a rounding.** An edge moved by `n` timeline frames moves `n` × speed
+source frames, and on a retimed clip that product can fall between two source frames. There is
+no honest answer to which one, so the operation refuses and names the speed: *"3 timeline
+frame(s) at speed 1/2 is not a whole number of source frames, and rounding it would drift"*.
+A retimed clip can still be rippled by a multiple of its denominator, and the test asserts
+both halves of that. Rounding silently is how an edit drifts a frame per adjustment, which is
+the defect this engine exists to make impossible. The other refusals are as specific: a roll or
+a slide with nothing on the other side of the cut, a trim that would leave a clip with no
+frames, a slip that would leave the media, and a `close_gap` at a frame a clip covers —
+because which nearby gap was meant is not something to guess. A move of zero appends nothing
+at all.
+
+**Measured on this machine**, Windows, GNU toolchain:
+
+```
+cargo fmt --all -- --check                                  exit 0
+cargo clippy --workspace --all-targets -- -D warnings        exit 0   no warnings
+cargo test --workspace --no-fail-fast                        exit 0   593 tests, 55 test targets
+cargo run -p maj-cli --bin maj -- mcp --list-tools           exit 0   57 tools
+```
+
+**14 tests more than the 579 recorded under P1**: eleven in `maj-timeline`'s new
+`tests/operations.rs` (each operation's shape and what it must *not* move, the whole
+operation as one undo step and back, the refusals, and a spread of amounts in both directions
+asserting that no track is left with a gap or an overlap), one more unit test in the crate
+itself for the edge vocabulary, one over the wire in `maj-mcp`'s protocol suite — where a
+ripple grows a sequence by twenty-five frames, one undo puts all three commands back, and a
+refusal names the side of the cut that was missing — and one in `maj-ui`'s document checks.
+
+**A count that had already gone stale is now a check.** `docs/MCP.md` said *"38 of the 57
+tools append commands, one command per change"* after the six composing tools were added:
+the total had been updated and the numerator had not, and one sentence was asserting something
+no longer true of six of its tools. It now names the 36 tools that append exactly one command
+and the six that append several, and `maj-ui`'s document checks assert the 36 against the
+catalogue, so the next tool that writes makes the sentence fail rather than rot. The check was
+verified by making it fail: `docs/MCP.md` was given 35 in the copy and the test reported the
+mismatch, then the file was restored.
+
+The work arrived with a failing `cargo fmt --check` and one clippy finding
+(`needless_lifetimes` in the crate's own locator); both were fixed at the cause. No check was
+suppressed.
+
+**What M6m still owes is the majority of the phase**, and it is named rather than implied:
+link groups, which change what a ripple *means* when picture and sound move together;
+`duplicate` and per-clip grade copy; speed as a seventh animatable channel including negative;
+the three- and four-point rules enforced rather than advised; and the shell calling these
+functions instead of composing its ripples by hand in `maj-ui/src/action.rs`, where
+`RippleDelete` today builds a `remove_clip` and a list of `move_clip`s itself.
+
 ## Position
 
-**M0 (foundation), M1 (determinism), the three P0 items and P1 (the document floor) are
-complete**, and the crates above them are implemented as far as this host and this order
-allow: `maj-core` holds the document, its command log, undo, markers, the autosave journal and
-the `.maj` format at schema 3; `maj-media` measures a file and finds it again by hash;
-`maj-color` and `maj-render` draw frames on the certified path; `maj-export` writes stills and
-manifests; `maj-cli` renders, verifies, measures, relinks and recovers headlessly; `maj-mcp`
-serves the editor over the Model Context Protocol as 51 tools; and `maj-ui` is the shell —
+**M0 (foundation), M1 (determinism), the three P0 items, P1 (the document floor) and the
+first half of M6m (the editorial operations) are complete**, and the crates above them are
+implemented as far as this host and this order allow: `maj-core` holds the document, its
+command log, undo, markers, the autosave journal and the `.maj` format at schema 3;
+`maj-media` measures a file and finds it again by hash; `maj-color` and `maj-render` draw
+frames on the certified path; `maj-export` writes stills and manifests; `maj-timeline`
+composes the editorial operations out of the commands the log already has; `maj-cli` renders,
+verifies, measures, relinks and recovers headlessly; `maj-mcp` serves the editor over the Model
+Context Protocol as 57 tools; and `maj-ui` is the shell —
 every intention a person can express, translating into the same commands an agent's tools
 append, with `maj-win32` as its window. The remaining crates are documented scaffolds that
 declare their responsibility, their layer and their permitted lower-layer dependencies, so the
@@ -346,10 +423,10 @@ layering is enforced by the compiler from the first commit.
 
 Nothing is blocked on a measurement of the host any more: the toolchain that blocked M2 is
 there (P0.4), and the document floor that had to precede the decoder is in (P1). What comes
-next is work, in the order the ultra plan sets out — **M6m** (the model's half of editing:
-link groups, structural commands, speed as a channel, enforced three- and four-point rules)
-then **M-X** (interchange), with M8a able to start immediately in its own lane because it
-needs no decoder. See **Not yet started** and **Next action** below, and
+next is work, in the order the ultra plan sets out — **the rest of M6m** (link groups, the
+structural commands, speed as a channel, enforced three- and four-point rules, and the shell
+composing through `maj-timeline` instead of by hand) then **M-X** (interchange), with M8a able
+to start immediately in its own lane because it needs no decoder. See **Not yet started** and **Next action** below, and
 `ROADMAP.md`'s *The order the ultra plan settles on* for the sequence and its four lanes.
 
 ## Verified evidence
@@ -717,7 +794,7 @@ excluded. See `docs/LICENSING.md`.
 
 | Phase | Blocked on |
 |---|---|
-| M6m Editing, the model's half | Nothing. It is the next thing: link groups, `close_gap`/`insert_blank`/`duplicate`/grade copy as commands, speed as the seventh animatable channel, and three- and four-point editing as enforced rules. The shell already composes the ripple operations, which is what makes the model's versions commands rather than intentions |
+| M6m Editing, the model's half | Nothing, and **in part done**: `ripple`, `roll`, `slip`, `slide`, `close_gap` and `insert_blank` are in `maj-timeline` as pure command compositions and on the agent's surface as six tools. Left: link groups, `duplicate` and per-clip grade copy, speed as the seventh animatable channel, three- and four-point editing as enforced rules, and the shell calling the library — `maj-ui/src/action.rs` still composes its ripples by hand |
 | M-X Interchange | M6m, because an EDL or an OTIO export is a rendering of the editorial model |
 | M8a Output correctness | Nothing, and no decoder: ranges, start timecode in the output, scopes as reductions over the framebuffer, a render queue |
 | M2a Media vocabulary and probe | The corpus — twenty synthetic files first, then a hundred. The toolchain is no longer among them |
@@ -741,11 +818,13 @@ excluded. See `docs/LICENSING.md`.
    is deliberately not decided inside a design document.
 4. **~~Perform M7's gate.~~ Deferred rather than dropped**: it cannot be met before M6m,
    which is why M7 is sequenced behind it in `ROADMAP.md`.
-5. **Begin M6m in the model lane**, in that order: link groups first (they change what a
-   ripple means), then the structural commands, then speed as a channel, then the three- and
-   four-point rules. Its gate is a property test over random timelines: no operation leaves a
-   gap or an overlap, one undo takes it back, and a refused operation changes neither the
-   state nor the document hash.
+5. **Continue M6m in the model lane — its first half is in.** The six editorial operations
+   are pure compositions in `maj-timeline` with their property gate green, and six tools
+   apply each as one undoable step. **The order for the rest is unchanged**: link groups
+   first (they change what a ripple means, so building the structural commands before them
+   would mean writing them twice), then `duplicate` and grade copy, then speed as a channel,
+   then the three- and four-point rules — and the shell moved onto the library, so one
+   ripple does not have two implementations.
 6. **Start M8a in its own lane at the same time**, because it needs no decoder: levels and
    range policy, the start timecode P1 added, scopes as reductions over the framebuffer with
    reference images to validate against, and a resumable render queue.
@@ -766,13 +845,13 @@ excluded. See `docs/LICENSING.md`.
 | `.maj` is text, not the planned binary container | ADR 0008 | M10, after the toolchain decision |
 | Local undo does not survive a session; the inverse stack is session state | `maj_core::History` | Never — it is the honest design, documented rather than faked |
 | Log replay is quadratic in project size | ADR 0002 | Only if measured to matter; the escape hatch is snapshots plus a tail |
-| `maj-timeline` is a separate crate from `maj-core` but the editorial operations are not yet extracted | `docs/ARCHITECTURE.md` | M6 |
+| `maj-timeline` holds the six composed operations and nothing else: link groups, `duplicate`, grade copy, speed as a channel and the three- and four-point rules are still to be extracted, and `maj-ui` composes its own ripples by hand meanwhile | `maj-timeline`, `maj-ui/src/action.rs` | The rest of M6m |
 | `wgpu` is not yet a dependency, so the render path is untested | ADR 0004 | M4 |
 | `PictureResolver::kind` costs a stat and cannot tell a damaged file from a readable one without reading it, so a manifest names a present-but-damaged still for its container while the frame gets a `damaged` placeholder | `maj-render/src/source.rs` | M2, when the decoder can answer the question cheaply from its own probe |
 | The grouping of commands into one undo step is session state, so it does not survive a save — a reopened project undoes command by command. The journal records the grouping, but only for the work that is not yet in the document | `maj_core::History`, `maj_core::journal` | Only if it turns out to matter; recording the grouping in the log would make it part of the document, which is a bigger decision than it looks |
 | A fingerprint's measured duration is optional, so a trim is still clamped against a number somebody typed whenever nothing has probed the file | `maj_core::entity`, `maj-render/src/source.rs` | M2a, when a probe can supply it; the render manifest says `unverified` until then, so the limit is visible rather than implied |
 | A marker has no reply, no resolve state and no thread — it is a note, not a conversation | `maj_core::entity` | M12, which owns anchored review |
-| Two cargo sessions in one checkout produce red gates that are not real: the tests' scratch directories are named per test, so two runs of the same suite at once collide | `crates/*/tests` | Use one git worktree per lane, as the ultra plan says; making the directories unique per process would hide the collision rather than avoid it |
+| Two cargo sessions in one checkout still collide on the source files themselves, and on `target/` | the checkout | One git worktree per lane, as the ultra plan says. The *test* half of this was fixed rather than worked around: every scratch directory is unique per process now, so two concurrent suites no longer produce false red gates |
 
 ## Working agreements
 

@@ -8,8 +8,8 @@
 //!
 //! So the living documents are checked here:
 //!
-//! * `docs/MCP.md`, `docs/COVERAGE.md` and `README.md` — the tool count, and the number of
-//!   command kinds the log can hold.
+//! * `docs/MCP.md`, `docs/COVERAGE.md` and `README.md` — the tool count, the number of tools
+//!   that append exactly one command, and the number of command kinds the log can hold.
 //! * `docs/UI.md` — the stroke count.
 //!
 //! Each check asserts that the phrase it looks for was *found* before it compares, because a
@@ -79,6 +79,24 @@ fn the_documents_count_the_tools_the_catalogue_has() {
     assert_claims("docs/MCP.md", "tools", tools);
     assert_claims("docs/COVERAGE.md", "tools", tools);
     assert_claims("README.md", "tools", tools);
+}
+
+#[test]
+fn the_document_counts_the_tools_that_append_one_command() {
+    // The editorial operations are counted *around*: they append several commands as one
+    // step, so they have no single command to declare themselves by. Counting the tools
+    // that do keeps this sentence from going stale the way it did when six composing tools
+    // arrived and only the total was updated.
+    let writing = maj_mcp::catalog::TOOLS
+        .iter()
+        .filter(|tool| tool.command.is_some())
+        .count();
+    assert!(writing > 0, "some tool writes");
+    assert!(
+        writing < maj_mcp::catalog::TOOLS.len(),
+        "and some tool only reads"
+    );
+    assert_claims("docs/MCP.md", "tools append exactly one command", writing);
 }
 
 #[test]

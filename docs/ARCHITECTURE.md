@@ -112,7 +112,7 @@ See ADR 0012, ADR 0013 and `docs/UI.md`.
 | `maj-playback` | 4 | M3 |
 | `maj-render` | 4 | **done (M4)** |
 | `maj-audio` | 4 | M9 |
-| `maj-timeline` | 5 | M6 |
+| `maj-timeline` | 5 | **the six composed operations are done (M6m, in part); the rest is M6** |
 | `maj-export` | 5 | **stills and manifests done; encoders are M8** |
 | `maj-ai`, `maj-agent` | 5 | M11 |
 | `maj-mcp` | 5 | **done (added after M8)** |
@@ -148,9 +148,10 @@ These are non-negotiable; the roadmap phases assume them.
 ## Where the crates are today
 
 M0 and M1 are complete, and the renderer, the colour model, the exporter's stills, the command
-line, the MCP server and the interface are built and gated: **nine crates carry real code** —
-`maj-time`, `maj-core`, `maj-color`, `maj-render`, `maj-export`, `maj-cli`, `maj-mcp`, `maj-ui`
-and `maj-win32`. The other **thirteen are documented scaffolds**: each declares its
+line, the MCP server, the editorial operations and the interface are built and gated: **eleven
+crates carry real code** — `maj-time`, `maj-core`, `maj-media`, `maj-timeline`, `maj-color`,
+`maj-render`, `maj-export`, `maj-cli`, `maj-mcp`, `maj-ui` and `maj-win32`. The other **eleven
+are documented scaffolds**: each declares its
 responsibility, its layer and a test that pins both, and it declares the lower-layer
 dependencies it is allowed to use, so the compiler enforces the layering from the first
 commit rather than by convention.
