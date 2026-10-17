@@ -2,6 +2,7 @@
 
 Updated: 2026-10-16
 
+
 ## P0 of the ultra plan: the three things that were blocking a decision
 
 The roadmap from M2 on was waiting on answers rather than on work, and three of them are
@@ -300,22 +301,136 @@ What this does **not** do: decode a frame. `MediaBackend::open_video` refuses wi
 `undecodable`, every movie still draws a labelled placeholder, and the viewer is still empty.
 That is M2b, and the shape above does not change when it arrives — `resolve` gains a branch.
 
+## P1: the document floor
+
+**Four facts about a document that a decoder cannot supply, added before the decoder because
+re-writing a schema afterwards costs more than writing it once.** Each is a command, so each
+is undoable, replayable and attributable like every other fact in the file.
+
+**1. A sequence knows what its first frame is called.** `Sequence::start_timecode_frames` and
+`SetSequenceStartTimecode`, refused below zero. It is a **label, not a move**: no clip changes
+position and every internal number stays an index from zero. It is what an EDL, a burn-in and
+a QC report speak, and the broadcast convention is an hour, so a programme does not begin at
+`00:00:00:00` and a pre-roll has somewhere to live.
+
+**2. An asset can be measured, and found again by what it measures.** `MediaFingerprint`
+carries BLAKE3 of the file's bytes, its size, and the duration the media itself reported
+**when anything has read the container** — the hash is required and the duration is optional,
+because hashing bytes is `std::fs` and reading a duration needs the probe that does not exist
+yet, and a required duration would force every fingerprint to be written by a build that
+cannot take it. `SetAssetFingerprint` records a measurement as a command; `RelinkAsset` points
+an asset at a different file **without changing its identity**, so every clip that reads it
+keeps its trims, its effects and its place. Measuring is I/O and no layer that owns a document
+does I/O, so the measurement is taken by the CLI (`maj fingerprint`, `maj relink`) and reaches
+the document the same way a person's edit does. Relinking matches **by hash, never by name**:
+reel and clip names collide, so a relink by name can resolve two shots to one asset and
+nothing reports it.
+
+**3. A marker is one entity for a marker, a comment, a review note and a chapter point.**
+`Marker` holds a name, a note, a frame, a length, one of **eight closed colours** and **its own
+author**. The author is a field rather than something derived from the log because a marker
+outlives the command that made it, and a review needs to read whose note it is without
+replaying anything. The colours are a closed set because a marker colour is a category an
+editor filters by, and a free `#rrggbb` would make "show me every red marker" a string
+comparison over whatever anyone happened to pick. `AddMarker`, `SetMarker` and `RemoveMarker`
+are exact inverses, and removing a marker from the middle of the list and undoing puts it back
+**where it was**, which is the promise clips already made.
+
+**4. The work that is not in the document yet survives a crash.** `maj_core::journal` is a
+sidecar (`<document>.maj.journal`), not part of the format, and the document never depends on
+it. An entry is one *group* of commands with the document hash it was applied against and the
+author who applied it. Reading is a **prefix that says where it stopped**: a line that cannot be
+read ends the readable prefix and names the line, and an entry whose base hash no longer
+matches is **skipped, never applied**. That distinction is the whole design: a half-written
+line is the real shape of a crash, so the entries before it are recovered rather than the
+journal being thrown away, while an entry written against an older revision is the case where
+the document was saved afterwards and replaying it would double the work. The grouping lives
+in the journal rather than in the document for the reason P0.2 gives: recording it would make
+"which commands were one undo step" part of the record, and a reopened project would undo
+differently from the session that wrote it.
+
+The schema moved to **3**, with both steps chained in `format::migrate`: `1 → 2` gave clips
+the compositing model, `2 → 3` gives sequences a start timecode and a marker list and assets a
+place to record a measurement. Every added field's default is the truth about the older
+document rather than a convenient blank — `fingerprint: null` says **nothing has measured this
+file**, which is exactly what was true, and a migration that invented a fingerprint would be
+asserting a measurement that never happened.
+
+Measured on this machine, Windows, GNU toolchain:
+
+```
+cargo fmt --all -- --check                                  exit 0
+cargo clippy --workspace --all-targets -- -D warnings        exit 0   no warnings
+cargo test --workspace --no-fail-fast                        exit 0   579 tests, 54 test targets
+cargo doc --workspace --no-deps                             exit 0   no warnings
+cargo test --release -p maj-core --test properties --test roundtrip
+                                                            exit 0   7 + 8 tests, 10,000-command fuzz
+cargo run -p maj-win32 --bin majestat -- --self-check          exit 0   23 checks, all as written
+cargo run --release -p maj-win32 --bin majestat -- --snapshot out.ppm
+                                                            exit 0, 1440x900, 85 zones
+cargo run --release -p maj-win32 --bin majestat -- --bench 300 exit 0, 39 zones
+                                                               three runs, 300 frames at 1440x900:
+                                                               whole 7.97-10.84 ms, incremental 2.00-2.80 ms
+```
+
+**P1's own gate, and how it was measured rather than asserted.** The journal has a test that
+kills nothing but proves the claim the death would test: a session applies three commands with
+`--no-save`, the journal is replayed onto the document, and the result is compared **byte for
+byte** with a second session that applied the same three commands and saved after each one
+(`a_session_recovered_from_its_journal_is_the_session_that_would_have_saved`). A second test
+cuts the journal mid-line — the crash itself — and asserts the readable prefix is recovered and
+the damage is named, with the torn tail distinguished from damage in the middle. `maj relink`
+has the same shape: a file moved to another directory is found by hash, and an asset nothing
+has measured is reported as unidentifiable rather than guessed at from its filename.
+
+**39 tests more than the 540 recorded under P0.4**, and the new ones are named where they live:
+six reversibility tests in `maj-core`'s undo suite (one per new command, each asserting state
+equality through undo *and* redo, and that a refusal changes nothing), the journal's own unit
+tests in `maj-core`, five in `maj-media` on measuring a file and finding it again, the four CLI
+gates above, the marker intentions in `maj-ui`'s model suite, and four checks that read the
+counts four documents claim out of the code those claims are about.
+
+**One environmental hazard, seen and not explained away.** A `cargo test --workspace` run
+early in this session reported three failures in `maj-cli --test cli` (the relink gate and both
+journal gates) and one in `maj-export`'s unit tests; the immediately following full run and
+that morning's runs were green, and each of those tests passes on its own. The likeliest cause
+is **another cargo session in this same checkout**: the log recorded it waiting on the build
+directory lock, and those tests' scratch directories are named per test, so two runs of the
+same suite at once collide. No assertion was weakened. It is recorded here as the third
+sighting of that failure mode, and the reason the ultra plan puts the four lanes in separate
+git worktrees rather than one folder.
+
+**The window's line base was re-measured and the recorded one is not reproducible.** At the M7
+gate the paint measured *whole 4.5-5.6 ms, incremental 1.3-1.5 ms* at 1440x900; today's
+release runs measure **whole 7.97-10.84 ms, incremental 2.00-2.80 ms**, and a debug build
+measures 20.65 / 5.58 ms. The plan predicted exactly this ("the 4.5 ms recorded in `STATE.md`
+is not reproducible on this machine today"), so the reason is not assumed: the frame draws more
+than it did — the snapshot reports **106 zones against 85**, and the self-check's colour count
+went from 1106 to 1230 — and part of the difference is the host rather than the paint. The
+numbers above are the baseline from here, and a claim that the paint is unchanged would need a
+measurement rather than this paragraph.
+
 ## Position
 
-**M0 (foundation) and M1 (determinism) are complete**, and the crates above them are
-implemented as far as this host allows: `maj-color` and `maj-render` draw frames on the
-certified path, `maj-export` writes stills and manifests, `maj-cli` renders and verifies
-headlessly, `maj-mcp` serves the editor over the Model Context Protocol, and `maj-ui` is the
-shell — every intention a person can express, translating into the same commands an agent's
-tools append. The remaining crates are documented scaffolds that declare their
-responsibility, their layer and their permitted lower-layer dependencies, so the layering is
-enforced by the compiler from the first commit.
+**M0 (foundation), M1 (determinism), the three P0 items and P1 (the document floor) are
+complete**, and the crates above them are implemented as far as this host and this order
+allow: `maj-core` holds the document, its command log, undo, markers, the autosave journal and
+the `.maj` format at schema 3; `maj-media` measures a file and finds it again by hash;
+`maj-color` and `maj-render` draw frames on the certified path; `maj-export` writes stills and
+manifests; `maj-cli` renders, verifies, measures, relinks and recovers headlessly; `maj-mcp`
+serves the editor over the Model Context Protocol as 51 tools; and `maj-ui` is the shell —
+every intention a person can express, translating into the same commands an agent's tools
+append, with `maj-win32` as its window. The remaining crates are documented scaffolds that
+declare their responsibility, their layer and their permitted lower-layer dependencies, so the
+layering is enforced by the compiler from the first commit.
 
-What blocks the rest is one measurement rather than a set of opinions: there is no C
-toolchain on this host, so nothing that links a Windows import library through `windows-sys`
-can be built — no media decoder (M2), and no toolkit-based window. The window itself did not
-need one: `maj-win32` declares the Win32 imports by hand, and the application runs on this
-machine today (ADR 0013). See **Blockers** below.
+Nothing is blocked on a measurement of the host any more: the toolchain that blocked M2 is
+there (P0.4), and the document floor that had to precede the decoder is in (P1). What comes
+next is work, in the order the ultra plan sets out — **M6m** (the model's half of editing:
+link groups, structural commands, speed as a channel, enforced three- and four-point rules)
+then **M-X** (interchange), with M8a able to start immediately in its own lane because it
+needs no decoder. See **Not yet started** and **Next action** below, and
+`ROADMAP.md`'s *The order the ultra plan settles on* for the sequence and its four lanes.
 
 ## Verified evidence
 
@@ -682,11 +797,13 @@ excluded. See `docs/LICENSING.md`.
 
 | Phase | Blocked on |
 |---|---|
-| M2 Media I/O | The corpus, the ADR authorising `unsafe` in a leaf FFI crate, and an FFmpeg build produced per `docs/FFMPEG.md`. The toolchain is no longer among them |
-| M3 Playback | M2 |
-| M4 Render + GPU | M3 (`wgpu` is deliberately not a dependency yet) |
-| M7 Interface — the three-minute edit itself | Nothing mechanical. The shell, the window, the pointer and the clock are built and gated; the gate needs a person to sit down and perform it, and M6's editorial operations |
-| Everything later | The chain above |
+| M6m Editing, the model's half | Nothing. It is the next thing: link groups, `close_gap`/`insert_blank`/`duplicate`/grade copy as commands, speed as the seventh animatable channel, and three- and four-point editing as enforced rules. The shell already composes the ripple operations, which is what makes the model's versions commands rather than intentions |
+| M-X Interchange | M6m, because an EDL or an OTIO export is a rendering of the editorial model |
+| M8a Output correctness | Nothing, and no decoder: ranges, start timecode in the output, scopes as reductions over the framebuffer, a render queue |
+| M2a Media vocabulary and probe | The corpus — twenty synthetic files first, then a hundred. The toolchain is no longer among them |
+| M2b Decoding | M2a, the ADR authorising `unsafe` in a leaf FFI crate, and the FFmpeg build produced per `docs/FFMPEG.md` |
+| M3, M4, M5, M9, M10, M11-M14 | The chain above; see `ROADMAP.md`'s sequence, which splits each of them rather than moving any of them |
+| M7's gate — the three-minute edit | M6m and M-X. The mechanism (shell, window, pointer, clock, title studio, browsers) is built and gated; the edit it is a gate *of* needs the editorial operations, so M7 is sequenced behind them rather than left marked "in progress" |
 
 ## Next action
 
@@ -702,12 +819,19 @@ excluded. See `docs/LICENSING.md`.
 3. **Write the ADR that authorises `unsafe` in a leaf FFI crate** (`docs/MEDIA.md` §8). It
    is the one thing M2 cannot start without, it relaxes a workspace-wide `forbid`, and it
    is deliberately not decided inside a design document.
-4. Perform M7's gate: a three-minute edit, end to end, by keyboard and pointer, with the
-   agent's tools used for at least one step of it — and record what it felt like, because
-   that is the measurement that phase is waiting on.
-5. Curate a starter corpus of twenty synthetic files covering the M2 axes, so the
+4. **~~Perform M7's gate.~~ Deferred rather than dropped**: it cannot be met before M6m,
+   which is why M7 is sequenced behind it in `ROADMAP.md`.
+5. **Begin M6m in the model lane**, in that order: link groups first (they change what a
+   ripple means), then the structural commands, then speed as a channel, then the three- and
+   four-point rules. Its gate is a property test over random timelines: no operation leaves a
+   gap or an overlap, one undo takes it back, and a refused operation changes neither the
+   state nor the document hash.
+6. **Start M8a in its own lane at the same time**, because it needs no decoder: levels and
+   range policy, the start timecode P1 added, scopes as reductions over the framebuffer with
+   reference images to validate against, and a resumable render queue.
+7. Curate a starter corpus of twenty synthetic files covering the M2 axes, so the
    hundred-file gate has somewhere to grow from.
-6. Begin M2 in the order `docs/MEDIA.md` §9 sets out: the vocabulary first, with no backend
+8. Begin M2 in the order `docs/MEDIA.md` §9 sets out: the vocabulary first, with no backend
    behind it, so the layering and the closed `kind` vocabulary are provable before a
    decoder exists; then probe over the corpus, which is most of M2's gate and needs no
    frames at all; then the `MediaResolver` adapter in `maj-render`, which is the moment the
@@ -727,7 +851,11 @@ excluded. See `docs/LICENSING.md`.
 | ~~`PictureResolver::kind` costs a stat and cannot tell a damaged file from a readable one without reading it~~ | ~~`maj-render/src/source.rs`~~ | **Repaid in M2a**: `MediaResolver` answers from a cached probe, which is a header read and never a decode. `WorkspaceResolver` on its own still has the limitation, and its documentation still says so — it has no prober in it |
 | A probe is reused while a file's length and modification time are unchanged, which is not a content hash: a file rewritten in place, to the same length, inside the timestamp's resolution, goes unnoticed | `maj_media::ProbeCache` | Only if measured to matter. Hashing on every `kind` call would cost a full read, which is the one cost that seam forbids; `invalidate` is the escape hatch, and P1's `measure` is the other half of the answer |
 | The synthetic corpus is written and read by this workspace, so a misunderstanding both halves share cannot be caught by it | `maj_media::corpus` | Retired by real media, not by more synthesis. The pathologies are hostile whatever wrote them, which is the part that holds regardless |
-| The grouping of commands into one undo step is session state, so it does not survive a save — a reopened project undoes command by command | `maj_core::History` | Only if it turns out to matter; recording the grouping in the log would make it part of the document, which is a bigger decision than it looks |
+| `maj-media` has two error types with one name: the probe's `MediaError` and `measure::MediaError`, the same three conditions spelled twice, so only the probe's is re-exported at the crate root | `maj_media` | M2b, where the decoder gives both a single caller. It is a rename, not a redesign — they already agree about what can go wrong |
+| The grouping of commands into one undo step is session state, so it does not survive a save — a reopened project undoes command by command. The journal records the grouping, but only for the work that is not yet in the document | `maj_core::History`, `maj_core::journal` | Only if it turns out to matter; recording the grouping in the log would make it part of the document, which is a bigger decision than it looks |
+| A fingerprint's measured duration is optional, so a trim is still clamped against a number somebody typed whenever nothing has probed the file | `maj_core::entity`, `maj-render/src/source.rs` | **M2a supplies the number and nothing spends it yet**: `VideoStream::frames` is read off `stts`/`stsz` for ISO base media and off `strh` for AVI, exactly where the container states it, and is `None` for Matroska, which states it in clusters. Wiring that into `MediaAsset`'s measured duration is a `maj-core` change and belongs to the lane that owns the schema |
+| A marker has no reply, no resolve state and no thread — it is a note, not a conversation | `maj_core::entity` | M12, which owns anchored review |
+| Two cargo sessions in one checkout produce red gates that are not real: the tests' scratch directories are named per test, so two runs of the same suite at once collide | `crates/*/tests` | Use one git worktree per lane, as the ultra plan says; making the directories unique per process would hide the collision rather than avoid it |
 
 ## Working agreements
 

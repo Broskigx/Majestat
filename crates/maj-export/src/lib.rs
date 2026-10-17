@@ -244,7 +244,10 @@ mod tests {
 
     #[test]
     fn a_frame_is_written_to_disk_with_its_manifest_beside_it() {
-        let directory = std::env::temp_dir().join("majestat-export-test");
+        // Per process, because two sessions in one checkout can run this suite at once and
+        // `cargo` releases the build lock before running the binaries.
+        let directory =
+            std::env::temp_dir().join(format!("majestat-export-test-{}", std::process::id()));
         std::fs::create_dir_all(&directory).expect("a temporary directory");
         let path = directory.join("frame.0001.png");
         let frame = Framebuffer::black(4, 3);

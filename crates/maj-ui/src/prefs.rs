@@ -234,7 +234,8 @@ mod tests {
     use super::*;
 
     fn scratch(name: &str) -> PathBuf {
-        let directory = std::env::temp_dir().join(format!("maj-ui-prefs-{name}"));
+        let directory =
+            std::env::temp_dir().join(format!("maj-ui-prefs-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&directory);
         std::fs::create_dir_all(&directory).expect("a scratch directory");
         directory

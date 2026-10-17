@@ -16,8 +16,15 @@ use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use serde_json::{Value, json};
 
 /// A directory under the target's temporary space, cleared on the way in.
+///
+/// The process identifier is part of the name because two sessions *can* run this suite at the
+/// same time — `cargo` releases the build directory lock before it runs the binaries — and the
+/// clearing below is exactly what makes a shared name fail: one run deletes the directory the
+/// other is still writing into. Seen, once, in this repository as a render that could not find
+/// the project a moment after writing it.
 fn scratch(name: &str) -> PathBuf {
-    let directory = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
+    let directory = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&directory);
     std::fs::create_dir_all(&directory).expect("a scratch directory");
     directory

@@ -3062,7 +3062,10 @@ mod tests {
                 0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 0, 10, 20, 30, 40, 50, 60, 70, 80, 90,
             ],
         );
-        let path = std::env::temp_dir().join("maj-resolver-still.png");
+        // Per process: two sessions in one checkout can run this suite at once, and both of
+        // these files are written and read within the test.
+        let path =
+            std::env::temp_dir().join(format!("maj-resolver-still-{}.png", std::process::id()));
         std::fs::write(&path, &bytes).expect("a writable temporary directory");
         let resolver = WorkspaceResolver::new();
         let resolved = resolver
@@ -3075,7 +3078,8 @@ mod tests {
         // A file that is named .png but is not one is never a picture: the extension is a
         // claim and the signature is the fact. Which of the two answers it gets is the
         // resolver's policy, and both of them say "damaged" rather than inventing pixels.
-        let liar = std::env::temp_dir().join("maj-resolver-liar.png");
+        let liar =
+            std::env::temp_dir().join(format!("maj-resolver-liar-{}.png", std::process::id()));
         std::fs::write(&liar, b"not a picture").expect("a writable temporary directory");
         let stood_in = resolver
             .resolve(&liar.to_string_lossy(), (16, 16), 0)

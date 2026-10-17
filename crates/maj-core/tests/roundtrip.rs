@@ -81,7 +81,8 @@ fn a_document_survives_json_and_disk_round_trips() {
         "the canonical form must be byte-identical after a round trip"
     );
 
-    let directory = std::env::temp_dir().join("maj-core-roundtrip-gate");
+    let directory =
+        std::env::temp_dir().join(format!("maj-core-roundtrip-gate-{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
     let path = directory.join(format!("fuzz.{}", format::MAJ_EXTENSION));
     format::save_to_path(&harness.project, &path).expect("save");

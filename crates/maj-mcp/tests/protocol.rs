@@ -144,7 +144,8 @@ impl Drop for Wire {
 
 /// The scratch directory these tests run in.
 fn scratch() -> std::path::PathBuf {
-    let directory = std::env::temp_dir().join("maj-mcp-wire-tests");
+    // Per process: two sessions in one checkout can run this suite at once.
+    let directory = std::env::temp_dir().join(format!("maj-mcp-wire-tests-{}", std::process::id()));
     std::fs::create_dir_all(&directory).expect("a scratch directory");
     directory
 }

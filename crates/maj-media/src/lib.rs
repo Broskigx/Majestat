@@ -43,12 +43,27 @@
 //!
 //! No frame is decoded by anything in this crate. [`MediaBackend::open_video`] refuses with
 //! `undecodable`, which has always been the honest label for a build with no decoder in it.
+//!
+//! [`mod@measure`] arrived from P1 and answers the other half of the question: it hashes a
+//! file and finds it again by hash, so a project survives a drive letter changing. The two
+//! halves meet where they should — `measure` says *whether this is the same file*, without
+//! opening the container, and [`ProbeCache`] says *what is inside it*, without decoding a
+//! frame.
+//!
+//! **They each define an error type and the two are the same three conditions spelled
+//! twice.** [`MediaError`] is this crate's, the one `docs/MEDIA.md` §3 specifies and the one
+//! that maps onto `maj_render::SourceError`'s three variants; [`measure::MediaError`] carries
+//! a `PathBuf` per variant instead of a sentence. Only one of them can be re-exported at the
+//! crate root, and it is the probe's, so `measure`'s keeps its module path. Converging them
+//! is M2b's, where the decoder gives both a single caller — and it is a rename, not a
+//! redesign, because they already agree about what can go wrong.
 
 mod cache;
 mod container;
 pub mod corpus;
 mod decode;
 mod error;
+pub mod measure;
 mod native;
 mod picture;
 mod probe;
@@ -67,6 +82,12 @@ pub use probe::{DecoderIdentity, HardwareSupport, MediaBackend, MediaProbe};
 pub use stream::{
     AudioStream, CodecKind, FieldOrder, FrameRateKind, Rotation, StreamInfo, StreamRole,
     VideoStream,
+};
+// `measure::MediaError` is deliberately not among these: the crate root's `MediaError` is the
+// probe's, and the two are the same three conditions spelled twice. See the module
+// documentation above.
+pub use measure::{
+    Found, Measurement, Search, Wanted, find_by_hash, measure, measure_uri, uri_of, url_to_path,
 };
 
 /// Human-readable statement of this crate's responsibility.

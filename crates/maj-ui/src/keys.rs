@@ -207,6 +207,12 @@ pub enum Binding {
     RippleDelete,
     /// Open a one-second gap at the playhead on the selected clip's track.
     InsertBlank,
+    /// Anchor a note to the active sequence at the playhead.
+    AddMarker,
+    /// Take the marker under the playhead away.
+    RemoveMarker,
+    /// Move the marker under the playhead to the next of the eight colours.
+    CycleMarkerColour,
     /// Put the playhead on the next or previous keyframe of the selected clip.
     StepKeyframe(i64),
     /// Put a keyframe on every channel of the selected clip that is already animated, or take
@@ -220,6 +226,13 @@ pub enum Binding {
 ///
 /// A test reads this table, so a binding can only be added by also adding its stroke here.
 pub const TABLE: &[(Stroke, Binding)] = &[
+    // The marker keys follow the two conventions an editor arrives with: `m` places a mark
+    // (Premiere and Resolve both use it), `shift+m` takes it away rather than placing a
+    // second one on the same frame, and `alt+m` walks the colour, which is what every other
+    // cycling key in this table does with `alt`.
+    (Stroke::character('m'), Binding::AddMarker),
+    (Stroke::character('m').shift(), Binding::RemoveMarker),
+    (Stroke::character('m').alt(), Binding::CycleMarkerColour),
     (
         Stroke::new(Press::Arrow(Direction::Left)),
         Binding::StepFrames(-1),

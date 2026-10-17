@@ -103,6 +103,13 @@ pub enum FieldKind {
     NameList(&'static [&'static str]),
     /// A nested object.
     Object(&'static [Field]),
+    /// A nested object that may be absent, in which case the field is sent as null.
+    ///
+    /// Distinct from an optional [`Object`](FieldKind::Object): that one may be *omitted*
+    /// and then takes its default, while this one may be explicitly **null**, and null is
+    /// a meaning rather than an absence — "nothing has measured this file" is a fact about
+    /// the asset, not a missing argument.
+    OptionalObject(&'static [Field]),
     /// A list of nested objects.
     List(&'static [Field]),
     /// An effect's parameter set: a map of key to value, or a list of `{key, value}`.
@@ -452,6 +459,77 @@ const TRANSITION_SHAPE: &[Field] = &[
     ),
 ];
 
+/// What a file measured, when something has measured it.
+const FINGERPRINT_SHAPE: &[Field] = &[
+    Field::required(
+        "content_hash",
+        FieldKind::Text,
+        "BLAKE3 of the file's bytes, lowercase hex. This is the identity a relink matches \
+         on, and it is what survives a rename, a re-wrap and a change of drive letter.",
+    ),
+    Field::required(
+        "size_bytes",
+        FieldKind::Integer,
+        "Length of the file in bytes: a cheap first rejection, so a file that cannot be \
+         the one is not hashed.",
+    ),
+    Field::free_optional(
+        "duration_frames",
+        FieldKind::Integer,
+        "Duration as the media itself reported it, in the asset's own frames. Send null, or \
+         leave the field out, when nothing has read the container — the bytes were measured \
+         and the duration was not, which is not the same as a duration of zero. When this \
+         disagrees with the asset's declared duration the engine reports the disagreement \
+         rather than picking a winner.",
+    ),
+];
+
+/// A note anchored to a span of a sequence.
+const MARKER_SHAPE: &[Field] = &[
+    Field::allocated(
+        "id",
+        "marker",
+        "Identifier. Omit and the engine allocates one.",
+    ),
+    Field::required(
+        "name",
+        FieldKind::Text,
+        "Short name, shown on the timeline. May be empty if there is a note.",
+    ),
+    Field::optional(
+        "note",
+        FieldKind::Text,
+        "The body of the note. A marker needs a name or a note; one with neither is refused.",
+        r#""""#,
+    ),
+    Field::required(
+        "frame",
+        FieldKind::Integer,
+        "Timeline frame it starts on, counted from zero — not a timecode.",
+    ),
+    Field::optional(
+        "length",
+        FieldKind::Integer,
+        "How many frames it covers. Zero is a point, which is what most markers are.",
+        "0",
+    ),
+    Field::optional(
+        "colour",
+        FieldKind::Names(&[
+            "blue", "cyan", "green", "yellow", "red", "pink", "purple", "white",
+        ]),
+        "Which of the eight colours it is drawn in. A closed set, so filtering by colour \
+         means something.",
+        r#""blue""#,
+    ),
+    Field::optional(
+        "author",
+        FieldKind::Text,
+        "Who wrote it, in the log's own vocabulary. Defaults to the session's author.",
+        r#""local""#,
+    ),
+];
+
 /// One registered media asset.
 const ASSET_SHAPE: &[Field] = &[
     Field::allocated(
@@ -463,9 +541,11 @@ const ASSET_SHAPE: &[Field] = &[
     Field::required(
         "uri",
         FieldKind::Text,
-        "Where the picture comes from. `generated:<label>` and `solid:<r>,<g>,<b>` are \
-         procedural and need no file; a path ending in `.ppm` is read from disk; anything \
-         else renders as a labelled chart rather than failing.",
+        "Where the picture comes from. `generated:<label>`, `solid:<r>,<g>,<b>` and \
+         `title:<face>:<size>:<colour>:<align>:<words>` are procedural and need no file; a \
+         path ending in `.png`, `.ppm` or `.pnm` is read from disk; anything else is media \
+         this build cannot read, and renders a labelled placeholder — `offline`, `damaged` \
+         or `undecodable` — which the render manifest names.",
     ),
     Field::required(
         "timebase",
@@ -488,6 +568,14 @@ const ASSET_SHAPE: &[Field] = &[
         FieldKind::Bool,
         "Whether it carries sound.",
         "false",
+    ),
+    Field::optional(
+        "fingerprint",
+        FieldKind::OptionalObject(FINGERPRINT_SHAPE),
+        "What the file measured, when something has measured it. Null means the duration \
+         above is a number somebody typed and nothing has checked, which is what every trim \
+         in the project is then clamped against.",
+        "null",
     ),
 ];
 
@@ -616,6 +704,20 @@ const SEQUENCE_SHAPE: &[Field] = &[
         "tracks",
         FieldKind::List(TRACK_SHAPE),
         "Tracks, bottom-first, which is the order they composite in.",
+        "[]",
+    ),
+    Field::optional(
+        "start_timecode_frames",
+        FieldKind::Integer,
+        "What frame zero of this sequence is called, as a frame count at its timebase. A \
+         label, not a position: no clip moves. The broadcast convention is an hour, which \
+         at 25 fps is 90000.",
+        "0",
+    ),
+    Field::optional(
+        "markers",
+        FieldKind::List(MARKER_SHAPE),
+        "Notes anchored to this timeline, in the order they were placed.",
         "[]",
     ),
 ];
@@ -878,6 +980,138 @@ pub static TOOLS: &[Tool] = &[
         read_only: false,
         destructive: false,
         example: r#"{"sequence":1,"clip":4,"speed":"1/2"}"#,
+    },
+    Tool {
+        name: "maj_set_sequence_start_timecode",
+        title: "Name frame zero",
+        description: "Say what timecode frame zero of a sequence is called, as a frame count \
+                      at its timebase. This is a label and not a move: no clip changes \
+                      position, and every internal number stays an index from frame zero. It \
+                      is what an EDL, a burn-in and a QC report speak. The broadcast \
+                      convention is one hour, so that programme does not start at \
+                      00:00:00:00 and a pre-roll has somewhere to live: that is 90000 at 25 \
+                      fps, 86400 at 24. A negative offset is refused.",
+        fields: &[
+            SESSION,
+            SEQUENCE,
+            Field::required(
+                "frames",
+                FieldKind::Integer,
+                "What frame zero is called, in frames at the sequence's own timebase.",
+            ),
+        ],
+        command: Some("set_sequence_start_timecode"),
+        read_only: false,
+        destructive: false,
+        example: r#"{"sequence":1,"frames":86400}"#,
+    },
+    Tool {
+        name: "maj_relink_asset",
+        title: "Relink media",
+        description: "Point an asset at a different file. The asset's identity does not \
+                      change, so every clip that reads it keeps its trims, its effects and \
+                      its place on the timeline — only where the bytes come from moves. This \
+                      is what a project needs when media has been re-wrapped, moved between \
+                      an offline and an online house, or had its drive letter change. Pair it \
+                      with `maj_set_asset_fingerprint` so that the relink can be checked \
+                      rather than assumed.",
+        fields: &[
+            SESSION,
+            Field::id("asset", "asset", "The asset to point somewhere else."),
+            Field::required("uri", FieldKind::Text, "Where it now lives."),
+        ],
+        command: Some("relink_asset"),
+        read_only: false,
+        destructive: false,
+        example: r#"{"asset":1,"uri":"file:///online/A001C001.mov"}"#,
+    },
+    Tool {
+        name: "maj_set_asset_fingerprint",
+        title: "Record what a file measured",
+        description: "Record the hash, size and — when something has read the container — the \
+                      measured duration of an asset's file, or pass null to say it is no \
+                      longer known. The engine performs no file I/O of its own, so a \
+                      measurement is taken where files are read and arrives here as a \
+                      command — which is what makes it undoable, replayable and attributable \
+                      like every other fact in the document. It matters twice over: the hash \
+                      is the identity a relink matches on, and every trim is clamped against \
+                      the asset's declared duration, which without a measured one is a number \
+                      somebody typed.",
+        fields: &[
+            SESSION,
+            Field::id("asset", "asset", "The asset that was measured."),
+            Field::optional(
+                "fingerprint",
+                FieldKind::OptionalObject(FINGERPRINT_SHAPE),
+                "What the file measured, or null to forget it.",
+                "null",
+            ),
+        ],
+        command: Some("set_asset_fingerprint"),
+        read_only: false,
+        destructive: false,
+        example: r#"{"asset":1,"fingerprint":{"content_hash":"9f2b...","size_bytes":104857600,"duration_frames":2400}}"#,
+    },
+    Tool {
+        name: "maj_add_marker",
+        title: "Add marker",
+        description: "Anchor a note to a sequence: a point, or a span. One entity serves a \
+                      marker, a comment, a review note and a chapter point, because they \
+                      differ in who wrote them and what colour they are rather than in what \
+                      they are. An agent should use this to record *why* it made an edit, \
+                      beside the commands that made it — a justification anchored to the \
+                      frame it is about is reviewable in a way a chat message is not. A \
+                      marker with neither a name nor a note is refused.",
+        fields: &[
+            SESSION,
+            SEQUENCE,
+            entity("marker", MARKER_SHAPE, "The note to anchor."),
+            Field::optional(
+                "index",
+                FieldKind::Integer,
+                "Where in the sequence's marker list it goes. Appended when omitted.",
+                "0",
+            ),
+        ],
+        command: Some("add_marker"),
+        read_only: false,
+        destructive: false,
+        example: r#"{"sequence":1,"marker":{"name":"regrade","note":"too warm from here","frame":240,"length":72,"colour":"yellow"}}"#,
+    },
+    Tool {
+        name: "maj_remove_marker",
+        title: "Remove marker",
+        description: "Take a note off a sequence. Undo puts it back where it was, in the \
+                      position it held in the list.",
+        fields: &[
+            SESSION,
+            SEQUENCE,
+            Field::id("marker", "marker", "The marker to remove."),
+        ],
+        command: Some("remove_marker"),
+        read_only: false,
+        destructive: true,
+        example: r#"{"sequence":1,"marker":7}"#,
+    },
+    Tool {
+        name: "maj_set_marker",
+        title: "Change marker",
+        description: "Replace a note, keeping its identity and its place in the list. Send \
+                      the whole marker: every field is as it will be, which is what makes \
+                      the inverse exact.",
+        fields: &[
+            SESSION,
+            SEQUENCE,
+            entity(
+                "marker",
+                MARKER_SHAPE,
+                "The marker, whose identifier names the one it replaces.",
+            ),
+        ],
+        command: Some("set_marker"),
+        read_only: false,
+        destructive: false,
+        example: r#"{"sequence":1,"marker":{"id":7,"name":"regrade","note":"fixed","frame":240,"length":72,"colour":"green"}}"#,
     },
     Tool {
         name: "maj_set_clip_enabled",
@@ -1533,6 +1767,10 @@ fn field_schema(field: &Field) -> Value {
             json!({"type": "array", "items": {"type": "string", "enum": names}})
         }
         FieldKind::Object(fields) => shape_schema(fields),
+        FieldKind::OptionalObject(fields) => {
+            description.push_str(" Send null to say there is none.");
+            json!({"oneOf": [shape_schema(fields), {"type": "null"}]})
+        }
         FieldKind::List(fields) => json!({"type": "array", "items": shape_schema(fields)}),
         FieldKind::Params => json!({
             "oneOf": [
@@ -1850,7 +2088,7 @@ mod tests {
             declared, model,
             "a command with no tool, or a tool for a command that does not exist"
         );
-        assert_eq!(model.len(), 30, "the model's command count moved");
+        assert_eq!(model.len(), 36, "the model's command count moved");
     }
 
     #[test]

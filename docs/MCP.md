@@ -13,7 +13,7 @@ command came from a keyboard or from a model.
 * Crate: `crates/maj-mcp` (layer 5, alongside `maj-export` and `maj-agent`)
 * Binary: `maj-mcp`, also reachable as `maj mcp`
 * Transport: JSON-RPC 2.0 over stdio, one message per line
-* Surface: **45 tools, 5 resources, 3 resource templates, 3 prompts**
+* Surface: **51 tools, 5 resources, 3 resource templates, 3 prompts**
 
 ## Running it
 
@@ -37,7 +37,7 @@ maj mcp --project reel-a.maj               # the same server, from the headless 
 The banner goes to **stderr**, so it never corrupts the protocol stream:
 
 ```
-maj-mcp 0.0.1 — 45 tools, 5 resources, 3 prompts on stdio
+maj-mcp 0.0.1 — 51 tools, 5 resources, 3 prompts on stdio
 ```
 
 ## Connecting a client
@@ -100,7 +100,7 @@ what exists.
 
 ## The tools
 
-Forty-five tools, in three kinds. **Thirty** map one-to-one onto a command variant and
+Fifty-one tools, in three kinds. **Thirty-six** map one-to-one onto a command variant and
 append exactly one command, named after the tool. **Two** — `maj_setup_sequence` and
 `maj_place_clip` — are shorthands that append a variable number of commands, which is why
 they declare no single variant: their work is still one command per change, so it is as
@@ -115,6 +115,8 @@ model defines, name for name, so the surface cannot drift from the engine.
 | `maj_create_media_asset` | Register media in the project at an index, or at the end. Registering is not importing: nothing is read from disk and the URI may be procedural (`generated:bars`). |
 | `maj_insert_media_asset` | The same registration at an explicit position in the pool. |
 | `maj_remove_media_asset` | Remove a registration, refusing when clips depend on it. |
+| `maj_relink_asset` | Point an asset at a different file. Its identity does not change, so every clip that reads it keeps its trims, its effects and its place: this is a relink, not a re-registration. |
+| `maj_set_asset_fingerprint` | Record what the file measured — BLAKE3 of its bytes, its size, and its duration if anything read the container — or clear the measurement with null. Measuring is I/O and this server does none, so the number arrives from wherever the file was read; it reaches the document as a command, which is what makes it attributable and undoable like every other fact here. |
 
 ### Sequence and track structure
 
@@ -124,6 +126,7 @@ model defines, name for name, so the surface cannot drift from the engine.
 | `maj_create_sequence` / `maj_insert_sequence` / `maj_remove_sequence` | Add a sequence, restore one at an index, remove one. |
 | `maj_create_track` / `maj_remove_track` | Add a video or audio track on a sequence, or remove one with everything on it. |
 | `maj_set_track_enabled` | Turn a whole track on or off: a disabled track stays on the sequence and the renderer skips it. |
+| `maj_set_sequence_start_timecode` | Say what timecode frame zero is called, as a frame count at the sequence's own timebase. A label rather than a move: no clip changes position. The broadcast convention is one hour — 90000 frames at 25 fps — so the programme does not start at `00:00:00:00` and a pre-roll has somewhere to live. A negative offset is refused. |
 
 ### Clips
 
@@ -153,6 +156,18 @@ retiming rate, and position/scale/rotation.
 | `maj_add_mask` / `maj_set_mask` / `maj_remove_mask` | Shape and geometry applied to a clip's effects. |
 | `maj_add_transition` / `maj_remove_transition` | A transition between two clips. |
 | `maj_set_channel_keys` | Keyframes on an animatable channel — a colour channel or an effect parameter. |
+
+### Markers
+
+Notes anchored to a span of a sequence. A marker carries its own author, so a review can
+read whose note it is without replaying anything, and one of eight closed colours, so
+filtering by colour means something.
+
+| Tool | What it does |
+|---|---|
+| `maj_add_marker` | Anchor a note at an index, at a frame, for a length or as a bare point. A marker needs a name or a note; one with neither is refused. |
+| `maj_set_marker` | Replace a note, keeping its identifier and its place in the list. |
+| `maj_remove_marker` | Take a note away. Undo puts it back where it was, not merely back. |
 
 ### Reading
 
@@ -287,16 +302,25 @@ What is exposed today, and what is deliberately not.
 
 | Area | Status |
 |---|---|
-| The command surface — structure, media, clips, properties, effects, masks, transitions, colour keys, undo and redo | **Exposed.** 32 of the 45 tools append commands, one command per change. |
+| The command surface — structure, media, clips, properties, effects, masks, transitions, markers, colour keys, undo and redo | **Exposed.** 38 of the 51 tools append commands, one command per change. |
 | Rendering and verification — frame render with the image, whole-vs-tiled verification, frame export with manifests | **Exposed.** The agent looks at its own work. |
 | Sessions — several named projects in one server, open, save, new | **Exposed.** Nothing is written to disk except on `maj_save_project` and `maj_export_frame`. |
 | Reading — project state, timeline, clip detail, log, replay check | **Exposed** as tools and as resources. |
 | Workflows — rough cut, colour pass, conform check | **Exposed** as prompts. |
-| Media I/O — probing and importing real files from disk | **Not exposed.** `maj-media` is not implemented, so `maj_create_media_asset` registers a URI without reading it. Registering is not importing, and the renderer is honest about the difference: `.png` and `.ppm` stills are read from disk, `generated:`, `solid:` and `title:` URIs are procedural, and **anything else is media this build cannot read** — one condition with one declared policy. By default it renders a labelled placeholder, named `offline`, `damaged` or `undecodable` in the render's own layer line and manifest, so an agent can tell a frame that stood in for something from a frame that did not. It never shows invented camera pixels, and it never silently shows a test chart in place of a shot. |
+| Media I/O — probing and importing real files from disk | **Not exposed.** `maj-media` has a measurement and no decoder, so `maj_create_media_asset` registers a URI without reading it. Registering is not importing, and the renderer is honest about the difference: `.png` and `.ppm` stills are read from disk, `generated:`, `solid:` and `title:` URIs are procedural, and **anything else is media this build cannot read** — one condition with one declared policy. By default it renders a labelled placeholder, named `offline`, `damaged` or `undecodable` in the render's own layer line and manifest, so an agent can tell a frame that stood in for something from a frame that did not. It never shows invented camera pixels, and it never silently shows a test chart in place of a shot. |
 | Audio — mixing, routing, effects | **Not exposed.** No audio model yet. |
 | Transcoding and delivery — encoders, muxing, C2PA | **Not exposed.** `maj-export` carries stills and manifests; video encodes arrive with M8 proper. |
 | Collaboration and cloud — presence, remote sessions, farm rendering | **Not exposed.** A server is one process over one log, which is what keeps its answers honest. |
 | Plugins and scripting | **Not exposed.** OpenFX, VST3 and Lua are M14. |
+
+One thing about a file does reach the document, and it arrives as a command rather than as a
+tool. `maj_set_asset_fingerprint` records what a file measured — the hash of its bytes, its
+size, and its duration if anything read the container — and `maj_relink_asset` follows those
+bytes when a drive letter changes. The measurement itself is taken by `maj fingerprint` and
+`maj relink` on the command line, because hashing is I/O a build does rather than an edit
+somebody makes, and the distinction is ADR 0011's: the server exposes *commands*, and neither
+verb is one. So an agent can read what an asset measured, and can relink it, but it cannot
+make this server hash a file behind the door.
 
 The surface grows by adding one tool per command, in one place, with the catalogue, the
 schema and the description generated from the same definitions the dispatcher uses. The

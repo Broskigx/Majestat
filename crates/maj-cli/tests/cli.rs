@@ -37,8 +37,15 @@ fn maj_ok(args: &[&str]) -> String {
 }
 
 /// A directory of its own for one test, so tests never share a file.
+///
+/// The process identifier is part of the name because two sessions *can* run this suite at the
+/// same time: `cargo` takes the build directory lock for the build and releases it before
+/// running the binaries, so a second run of the same suite in one checkout collides with the
+/// first on any name that does not say which process it belongs to. That collision has already
+/// produced three false red gates in this repository; a scratch name is not worth one more.
 fn scratch(name: &str) -> PathBuf {
-    let directory = std::env::temp_dir().join(format!("majestat-cli-{name}"));
+    let directory =
+        std::env::temp_dir().join(format!("majestat-cli-{name}-{}", std::process::id()));
     std::fs::remove_dir_all(&directory).ok();
     std::fs::create_dir_all(&directory).expect("a temporary directory");
     directory
@@ -679,4 +686,325 @@ fn strict_media_turns_a_placeholder_into_a_refusal() {
 
     // And it is a switch the help names, because an option nobody can find is not a policy.
     assert!(maj_ok(&["help"]).contains("--strict-media"));
+}
+
+/// A project with one asset pointing at a real file, one procedural asset and one whose file
+/// is not there: the three answers `maj fingerprint` has to give.
+fn project_with_files(directory: &Path, payload: &[u8]) -> (Project, PathBuf) {
+    let media = directory.join("card").join("A001C001.mov");
+    std::fs::create_dir_all(media.parent().unwrap()).expect("a card directory");
+    std::fs::write(&media, payload).expect("a file on the card");
+    let mut project = Project::new("relink");
+    let mut history = History::new();
+    history
+        .apply_local(
+            &mut project,
+            Command::CreateSequence {
+                index: 0,
+                sequence: Sequence::new(
+                    SequenceId::new(1),
+                    "cut",
+                    Timebase::FPS_25,
+                    32,
+                    18,
+                    48_000,
+                )
+                .unwrap(),
+            },
+        )
+        .unwrap();
+    for (id, name, uri) in [
+        (1, "A001C001", maj_media::uri_of(&media)),
+        (2, "bars", "generated:bars".to_owned()),
+        (
+            3,
+            "gone",
+            maj_media::uri_of(&directory.join("card").join("missing.mov")),
+        ),
+    ] {
+        let index = project.assets().len();
+        history
+            .apply_local(
+                &mut project,
+                Command::CreateMediaAsset {
+                    index,
+                    asset: MediaAsset::new(MediaAssetId::new(id), name, uri, Timebase::FPS_25, 240)
+                        .unwrap()
+                        .with_streams(true, false),
+                },
+            )
+            .unwrap();
+    }
+    (project, media)
+}
+
+#[test]
+fn fingerprinting_records_a_measurement_and_invents_nothing() {
+    // The two measurements are made by different amounts of the engine, and the document has
+    // to say which of them happened: the hash is `std::fs`, the duration needs a probe that
+    // does not exist yet, and a duration of zero would be a trim bound nobody measured.
+    let directory = scratch("fingerprint");
+    let project_path = directory.join("relink.maj");
+    let payload = b"first eight bytes";
+    let (project, media) = project_with_files(&directory, payload);
+    maj_core::format::save_to_path(&project, &project_path).expect("the project saves");
+    let path = project_path.to_str().unwrap();
+
+    let printed = maj_ok(&["fingerprint", "--project", path]);
+    assert!(printed.contains("procedural"), "{printed}");
+    assert!(printed.contains("not there"), "{printed}");
+
+    let after = maj_core::format::load_from_path(&project_path).unwrap();
+    let measured = after.asset(MediaAssetId::new(1)).unwrap();
+    assert!(measured.is_identified(), "the bytes were measured");
+    assert!(
+        !measured.is_verified(),
+        "and the duration was not: nothing in this build has read the container"
+    );
+    let fingerprint = measured.fingerprint().expect("a recorded measurement");
+    assert_eq!(fingerprint.size_bytes(), payload.len() as u64);
+    assert_eq!(
+        fingerprint.content_hash(),
+        blake3::hash(payload).to_hex().to_string(),
+        "the document holds the hash of the bytes and nothing else"
+    );
+    assert!(matches!(
+        maj_media::measure(&media),
+        Ok(their) if their.content_hash() == fingerprint.content_hash()
+    ));
+
+    // A procedural URI names no file, and a missing one is not a measurement either.
+    assert!(
+        after
+            .asset(MediaAssetId::new(2))
+            .unwrap()
+            .fingerprint()
+            .is_none()
+    );
+    assert!(
+        after
+            .asset(MediaAssetId::new(3))
+            .unwrap()
+            .fingerprint()
+            .is_none()
+    );
+
+    // And the dry run is a real dry run: nothing in the document moves.
+    let dry = directory.join("dry.maj");
+    maj_core::format::save_to_path(&project, &dry).expect("a second copy");
+    let before = maj_core::format::load_from_path(&dry)
+        .unwrap()
+        .document_hash()
+        .unwrap();
+    let said = maj_ok(&[
+        "fingerprint",
+        "--project",
+        dry.to_str().unwrap(),
+        "--dry-run",
+    ]);
+    assert!(said.contains("nothing written"), "{said}");
+    let unchanged = maj_core::format::load_from_path(&dry)
+        .unwrap()
+        .document_hash()
+        .unwrap();
+    assert_eq!(before, unchanged, "a dry run writes nothing at all");
+}
+
+#[test]
+fn relinking_follows_the_bytes_and_not_the_name() {
+    // A relink by name can resolve two different shots to one asset and nothing reports it.
+    // The decoy here has the same length as the real file, so it is hashed and then refused —
+    // which is the size doing the job it is in the fingerprint for.
+    let directory = scratch("relink");
+    let (project, media) = project_with_files(&directory, b"the bytes of shot one");
+    let project_path = directory.join("relink.maj");
+    maj_core::format::save_to_path(&project, &project_path).expect("the project saves");
+    let path = project_path.to_str().unwrap();
+    maj_ok(&["fingerprint", "--project", path]);
+
+    // Without a measurement there is no identity to search for, and it says so.
+    let unmeasured = directory.join("unmeasured.maj");
+    maj_core::format::save_to_path(&project, &unmeasured).expect("a copy");
+    let before = maj_core::format::load_from_path(&unmeasured)
+        .unwrap()
+        .document_hash()
+        .unwrap();
+    let said = maj_ok(&[
+        "relink",
+        "--project",
+        unmeasured.to_str().unwrap(),
+        "--search",
+        directory.to_str().unwrap(),
+    ]);
+    assert!(said.contains("has been measured"), "{said}");
+    assert_eq!(
+        before,
+        maj_core::format::load_from_path(&unmeasured)
+            .unwrap()
+            .document_hash()
+            .unwrap()
+    );
+
+    // The card is mounted elsewhere now, under a different name, and a file of the same
+    // length with different bytes sits where the original was.
+    let moved_to = directory.join("online").join("A001C777.mov");
+    std::fs::create_dir_all(moved_to.parent().unwrap()).unwrap();
+    std::fs::rename(&media, &moved_to).unwrap();
+    std::fs::write(&media, b"the bytes of shot TWO").unwrap();
+
+    let printed = maj_ok(&[
+        "relink",
+        "--project",
+        path,
+        "--search",
+        directory.to_str().unwrap(),
+    ]);
+    assert!(printed.contains("rejected on length"), "{printed}");
+
+    let after = maj_core::format::load_from_path(&project_path).unwrap();
+    let asset = after.asset(MediaAssetId::new(1)).unwrap();
+    assert_eq!(
+        asset.uri(),
+        maj_media::uri_of(&moved_to),
+        "the identity found the file, not the name: {printed}"
+    );
+    assert!(
+        asset.is_identified(),
+        "relinking moves where the bytes come from and nothing else"
+    );
+
+    // A second run has nothing left to do, because the project now points where the bytes are.
+    let again = maj_ok(&[
+        "relink",
+        "--project",
+        path,
+        "--search",
+        directory.to_str().unwrap(),
+    ]);
+    assert!(again.contains("nothing to relink"), "{again}");
+}
+
+#[test]
+fn a_session_recovered_from_its_journal_is_the_session_that_would_have_saved() {
+    // P1's own gate, through the interface a person has: the process dies, the journal is
+    // replayed, and the document that comes out is the one the session would have written —
+    // byte for byte, because the log records who made each edit and the hash covers the log.
+    let directory = scratch("recover");
+    let (project, _) = project_with_files(&directory, b"bytes");
+    let session = directory.join("session.maj");
+    maj_core::format::save_to_path(&project, &session).expect("the project saves");
+    let journal = maj_core::journal_path_for(&session);
+    let path = session.to_str().unwrap();
+    let journal_text = journal.to_str().unwrap();
+
+    let commands = [
+        r#"{"kind":"set_sequence_start_timecode","sequence":1,"frames":86400}"#,
+        r#"{"kind":"set_sequence_start_timecode","sequence":1,"frames":172800}"#,
+        r#"{"kind":"relink_asset","asset":1,"uri":"file:///online/A001C001.mov"}"#,
+    ];
+    for command in commands {
+        let printed = maj_ok(&[
+            "edit",
+            "--project",
+            path,
+            "--journal",
+            journal_text,
+            "--no-save",
+            "--command",
+            command,
+        ]);
+        assert!(printed.contains("not saved"), "{printed}");
+    }
+    // Nothing was saved: the document on disk is the one the session started from.
+    let on_disk = maj_core::format::load_from_path(&session).unwrap();
+    assert_eq!(on_disk.revision(), project.revision());
+    assert_eq!(
+        on_disk.asset(MediaAssetId::new(1)).unwrap().uri(),
+        project.asset(MediaAssetId::new(1)).unwrap().uri()
+    );
+
+    let recovered = directory.join("recovered.maj");
+    let printed = maj_ok(&[
+        "recover",
+        "--project",
+        path,
+        "--out",
+        recovered.to_str().unwrap(),
+    ]);
+    assert!(printed.contains("3 applied"), "{printed}");
+    assert!(printed.contains("document hash"), "{printed}");
+
+    // The same three commands, applied to a session that saved after each one.
+    let clean = directory.join("clean.maj");
+    maj_core::format::save_to_path(&project, &clean).expect("a clean session");
+    for command in commands {
+        maj_ok(&[
+            "edit",
+            "--project",
+            clean.to_str().unwrap(),
+            "--command",
+            command,
+        ]);
+    }
+    assert_eq!(
+        std::fs::read(&recovered).unwrap(),
+        std::fs::read(&clean).unwrap(),
+        "the recovered document is the document the session would have saved"
+    );
+}
+
+#[test]
+fn a_journal_that_was_cut_off_recovers_the_prefix_and_says_so() {
+    let directory = scratch("torn-journal");
+    let (project, _) = project_with_files(&directory, b"bytes");
+    let session = directory.join("session.maj");
+    maj_core::format::save_to_path(&project, &session).expect("the project saves");
+    let journal = maj_core::journal_path_for(&session);
+    let path = session.to_str().unwrap();
+    let journal_text = journal.to_str().unwrap();
+
+    for frames in [3600, 7200] {
+        let command =
+            format!(r#"{{"kind":"set_sequence_start_timecode","sequence":1,"frames":{frames}}}"#);
+        maj_ok(&[
+            "edit",
+            "--project",
+            path,
+            "--journal",
+            journal_text,
+            "--no-save",
+            "--command",
+            &command,
+        ]);
+    }
+    // The last write was cut off, which is what a kill during an append leaves behind.
+    let text = std::fs::read_to_string(&journal).unwrap();
+    let cut = text.len() - 20;
+    std::fs::write(&journal, &text.as_bytes()[..cut]).unwrap();
+
+    let before = maj_core::format::load_from_path(&session)
+        .unwrap()
+        .document_hash()
+        .unwrap();
+    let printed = maj_ok(&["recover", "--project", path, "--dry-run"]);
+    assert!(printed.contains("1 applied"), "{printed}");
+    assert!(printed.contains("cut off"), "{printed}");
+    assert!(printed.contains("nothing written"), "{printed}");
+    assert_eq!(
+        before,
+        maj_core::format::load_from_path(&session)
+            .unwrap()
+            .document_hash()
+            .unwrap(),
+        "a dry run recovers nothing into the document"
+    );
+
+    // Recovering for real keeps the prefix and leaves the journal alone, because a partial
+    // recovery has work behind it that somebody may still want to look at.
+    let out = directory.join("recovered.maj");
+    let printed = maj_ok(&["recover", "--project", path, "--out", out.to_str().unwrap()]);
+    assert!(printed.contains("left in place"), "{printed}");
+    assert!(journal.exists(), "the recovery did not delete the evidence");
+    let recovered = maj_core::format::load_from_path(&out).unwrap();
+    assert_eq!(recovered.revision(), project.revision() + 1);
 }

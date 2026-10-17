@@ -4,7 +4,7 @@
 //! phase can be tested from a script and reproduced from a log. A render that only the
 //! interface can start is a render nobody can bisect.
 //!
-//! Six commands, and each one answers a question a person can ask of a project without
+//! Nine commands, and each one answers a question a person can ask of a project without
 //! opening an editor:
 //!
 //! | Command | Question |
@@ -14,7 +14,16 @@
 //! | `probe` | What is in this project? |
 //! | `bench` | How long does a frame take on *this* machine, and does it repeat? |
 //! | `edit` | What does applying one command to the document do to it? |
+//! | `fingerprint` | Which bytes is each asset, measured rather than asserted? |
+//! | `relink` | Where did those bytes go, and can the project follow them? |
+//! | `recover` | What was the last session holding when it died? |
 //! | `mcp` | Serve this editor to an agent, over the Model Context Protocol |
+//!
+//! `fingerprint`, `relink` and `recover` are **engine verbs rather than MCP tools**, and the
+//! distinction is ADR 0011's: the server exposes *commands*, and none of these three is one.
+//! Measuring a file is I/O that a build does, not an edit somebody makes, and its result
+//! reaches the document as `SetAssetFingerprint` — a command, undoable and attributable — by
+//! the same route a person's edit takes.
 //!
 //! `mcp` is the same engine behind a different door: it hands a language model the typed
 //! commands as tools, in the crate [`maj_mcp`] implements. Nothing about it is a second
@@ -30,11 +39,13 @@
 //! a command that reports a number it did not check is a command that lies.
 
 use std::fmt;
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use maj_color::TransferFunction;
-use maj_core::{Command, Project, Sequence, SequenceId};
+use maj_core::{Command, MediaAssetId, Project, Sequence, SequenceId};
 use maj_export::{ImageFormat, manifest};
+use maj_media::{Measurement, Wanted, find_by_hash, measure_uri, uri_of};
 use maj_render::{
     BitDepth, MissingMedia, RenderError, RenderManifest, RenderPolicy, RenderRequest, RenderTask,
     WorkspaceResolver, render_frame, render_tiled,
@@ -165,6 +176,30 @@ fn run(args: &[String]) -> Result<(), CliError> {
             }
             edit(&options)
         }
+        "fingerprint" => {
+            let options = Options::parse(rest)?;
+            if options.has("help") {
+                print_usage();
+                return Ok(());
+            }
+            fingerprint(&options)
+        }
+        "relink" => {
+            let options = Options::parse(rest)?;
+            if options.has("help") {
+                print_usage();
+                return Ok(());
+            }
+            relink(&options)
+        }
+        "recover" => {
+            let options = Options::parse(rest)?;
+            if options.has("help") {
+                print_usage();
+                return Ok(());
+            }
+            recover(&options)
+        }
         "mcp" => {
             let options = Options::parse(rest)?;
             if options.has("help") {
@@ -202,6 +237,9 @@ fn print_usage() {
     println!("  probe    Report the sequences, tracks, clips and media of a project");
     println!("  bench    Time a real render on this machine, and check it repeats");
     println!("  edit     Apply one command to a project and save the result");
+    println!("  fingerprint  Measure every asset that names a file, and record it");
+    println!("  relink   Find an asset's bytes again by hash, and point the project at them");
+    println!("  recover  Apply the autosave journal to a document and report what it did");
     println!("  mcp      Serve the editor to an agent over the Model Context Protocol");
     println!("  version  Print the version");
     println!();
@@ -225,6 +263,15 @@ fn print_usage() {
     println!("EDIT OPTIONS");
     println!("  --command <json>     One command, as the log stores it (required)");
     println!("  --out <path>         Where to save (default: in place)");
+    println!("  --journal <path>     Append this group to an autosave journal; cleared once the");
+    println!("                       document is saved, because the work is then in the document");
+    println!("  --no-save            Do not write the document: the journal holds the work");
+    println!();
+    println!("FINGERPRINT, RELINK AND RECOVER OPTIONS");
+    println!("  --out <path>         Where to save (default: in place)");
+    println!("  --dry-run            Report what would change and write nothing");
+    println!("  --search <dir>       relink: the tree to look in (required)");
+    println!("  --journal <path>     recover: the journal (default: <document>.journal)");
     println!();
     println!("MCP OPTIONS");
     println!("  --project <path>     The document to open (optional; an empty project otherwise)");
@@ -751,17 +798,338 @@ fn edit(options: &Options) -> Result<(), CliError> {
     let text = options.required("command")?;
     let command: Command = serde_json::from_str(text)
         .map_err(|error| CliError::usage(format!("`--command` is not a command: {error}")))?;
+    let journal = journal_path(options);
+    // With a journal, this invocation continues the session the journal holds: the document
+    // on disk is only the last save, and an entry has to chain onto what the journal already
+    // recorded rather than onto the document. Without this, a second `maj edit --no-save`
+    // would write an entry against a hash that its own predecessor has already moved past,
+    // and a recovery would be right to refuse it.
+    if let Some(path) = &journal {
+        let recovery = maj_core::journal::recover(&mut project, path)
+            .map_err(|error| CliError::operation(format!("`{}`: {error}", path.display())))?;
+        if !recovery.is_empty() {
+            println!(
+                "journal: replayed {} entr{} holding {} command(s), revision {} -> {}",
+                recovery.applied,
+                if recovery.applied == 1 { "y" } else { "ies" },
+                recovery.commands,
+                recovery.revision_before,
+                recovery.revision_after
+            );
+            if let Some(line) = recovery.unreadable_from {
+                println!("journal: line {line} could not be read; nothing after it applies");
+            }
+        }
+    }
     let before = project.revision();
+    // One command is one group, and it is journaled as that group, so a recovery replays the
+    // same shape the session applied. The entry is written *before* the change and after the
+    // hash it is written against is known, and only reaches the file once the change stuck:
+    // a journal line that describes an edit the model refused would replay as a refusal.
+    let entry = match &journal {
+        Some(_) => Some(
+            maj_core::JournalEntry::new(
+                project.document_hash()?,
+                maj_core::DEFAULT_AUTHOR,
+                vec![command.clone()],
+            )
+            .map_err(|error| CliError::operation(format!("cannot journal: {error}")))?,
+        ),
+        None => None,
+    };
     let mut history = maj_core::History::new();
-    history.apply_local(&mut project, command)?;
+    history.apply_group_local(&mut project, vec![command])?;
+    if let (Some(path), Some(entry)) = (&journal, &entry) {
+        maj_core::journal::append(path, entry)
+            .map_err(|error| CliError::operation(format!("cannot journal: {error}")))?;
+    }
+    if options.has("no-save") {
+        println!(
+            "revision {before} -> {} (not saved{})",
+            project.revision(),
+            if journal.is_some() {
+                "; the journal holds it"
+            } else {
+                ""
+            }
+        );
+        return Ok(());
+    }
     let out = options.string("out", &path);
     maj_core::format::save_to_path(&project, &out)?;
+    if let Some(path) = &journal {
+        // The work is in the document now, which is what the journal was holding.
+        std::fs::write(path, "")
+            .map_err(|error| CliError::operation(format!("`{}`: {error}", path.display())))?;
+    }
     println!(
         "revision {before} -> {}, state hash {}",
         project.revision(),
         project.state_hash()?
     );
     println!("wrote {out}");
+    Ok(())
+}
+
+/// The journal a command was asked to write, if it was asked at all.
+fn journal_path(options: &Options) -> Option<PathBuf> {
+    options
+        .get("journal")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+}
+
+/// The first twelve characters of a hash: enough to compare by eye, short enough to read.
+fn short_hash(hash: &str) -> &str {
+    hash.get(..12).unwrap_or(hash)
+}
+
+/// Measures every asset that names a file, and records what it measured.
+///
+/// The measurement is taken here because this is where files are read, and it reaches the
+/// document as a command — which is what makes it undoable, replayable and attributable
+/// rather than a shadow fact living beside the log. Nothing is invented: an asset that names
+/// no file is reported as such, and one whose file cannot be read is reported with the
+/// engine's own reason for it.
+fn fingerprint(options: &Options) -> Result<(), CliError> {
+    let path = options.required("project")?.to_owned();
+    let mut project = load(&path)?;
+    let assets: Vec<(
+        MediaAssetId,
+        String,
+        String,
+        Option<maj_core::MediaFingerprint>,
+    )> = project
+        .assets()
+        .iter()
+        .map(|asset| {
+            (
+                asset.id(),
+                asset.name().to_owned(),
+                asset.uri().to_owned(),
+                asset.fingerprint().cloned(),
+            )
+        })
+        .collect();
+    let mut commands = Vec::new();
+    let mut recorded = 0_usize;
+    let mut unchanged = 0_usize;
+    let mut procedural = 0_usize;
+    let mut unavailable = 0_usize;
+    for (id, name, uri, current) in &assets {
+        match measure_uri(uri) {
+            Measurement::Measured(fingerprint) => {
+                if current.as_ref() == Some(&fingerprint) {
+                    unchanged += 1;
+                    println!(
+                        "  {id} `{name}` already measures blake3 {}",
+                        short_hash(fingerprint.content_hash())
+                    );
+                    continue;
+                }
+                println!(
+                    "  {id} `{name}` {} bytes, blake3 {} @ {uri}",
+                    fingerprint.size_bytes(),
+                    short_hash(fingerprint.content_hash())
+                );
+                commands.push(Command::SetAssetFingerprint {
+                    asset: *id,
+                    fingerprint: Some(fingerprint),
+                });
+                recorded += 1;
+            }
+            Measurement::NotAFile => {
+                procedural += 1;
+                println!("  {id} `{name}` names no file: there is nothing on disk to measure");
+            }
+            Measurement::Unavailable(error) => {
+                unavailable += 1;
+                println!("  {id} `{name}` {error}");
+            }
+        }
+    }
+    println!();
+    println!(
+        "  {recorded} to record, {unchanged} already measured, {procedural} procedural, \
+         {unavailable} unreadable"
+    );
+    if commands.is_empty() {
+        println!("nothing to record: the document is unchanged");
+        return Ok(());
+    }
+    if options.has("dry-run") {
+        println!("would record {recorded} measurement(s): nothing written");
+        return Ok(());
+    }
+    let before = project.revision();
+    let mut history = maj_core::History::new();
+    history.apply_group_local(&mut project, commands)?;
+    let out = options.string("out", &path);
+    maj_core::format::save_to_path(&project, &out)?;
+    println!("revision {before} -> {}; wrote {out}", project.revision());
+    Ok(())
+}
+
+/// Finds an asset's bytes again by hash, and points the project at where they are now.
+///
+/// Relinking by hash rather than by name is the whole point: reel and clip names collide, so
+/// a relink by name can resolve two different shots to one asset and nothing reports it. An
+/// asset that has never been measured has no identity to match on, and is reported as such
+/// rather than being guessed at from its filename.
+fn relink(options: &Options) -> Result<(), CliError> {
+    let path = options.required("project")?.to_owned();
+    let root = PathBuf::from(options.required("search")?);
+    let mut project = load(&path)?;
+    let assets: Vec<(
+        MediaAssetId,
+        String,
+        String,
+        Option<maj_core::MediaFingerprint>,
+    )> = project
+        .assets()
+        .iter()
+        .map(|asset| {
+            (
+                asset.id(),
+                asset.name().to_owned(),
+                asset.uri().to_owned(),
+                asset.fingerprint().cloned(),
+            )
+        })
+        .collect();
+    let mut wanted = Vec::new();
+    let mut unidentified = 0_usize;
+    for (id, _, _, current) in &assets {
+        match current {
+            Some(fingerprint) => wanted.push(Wanted {
+                asset: *id,
+                content_hash: fingerprint.content_hash().to_owned(),
+                size_bytes: fingerprint.size_bytes(),
+            }),
+            None => unidentified += 1,
+        }
+    }
+    if wanted.is_empty() {
+        println!(
+            "no asset in {path} has been measured, so there is no identity to search for;\n\
+             run `maj fingerprint --project {path}` first"
+        );
+        return Ok(());
+    }
+    let search = find_by_hash(&root, &wanted)
+        .map_err(|error| CliError::operation(format!("--search {error}")))?;
+    let mut commands = Vec::new();
+    let mut already = 0_usize;
+    for found in &search.found {
+        let uri = uri_of(&found.path);
+        let Some((_, name, current_uri, _)) = assets.iter().find(|(id, ..)| *id == found.asset)
+        else {
+            continue;
+        };
+        if *current_uri == uri {
+            already += 1;
+            continue;
+        }
+        println!("  {} `{name}` -> {uri}", found.asset);
+        commands.push(Command::RelinkAsset {
+            asset: found.asset,
+            uri,
+        });
+    }
+    println!();
+    println!(
+        "  {} file(s) hashed, {} rejected on length without being read, {already} already in \
+         place",
+        search.hashed, search.skipped_by_size
+    );
+    for (directory, reason) in &search.unreadable {
+        println!("  could not list {}: {reason}", directory.display());
+    }
+    if search.found.len() < wanted.len() {
+        println!(
+            "  {} asset(s) were not found under {}; their pictures are still offline",
+            wanted.len() - search.found.len(),
+            root.display()
+        );
+    }
+    if unidentified > 0 {
+        println!(
+            "  {unidentified} asset(s) have never been measured, so nothing can be matched \
+             for them"
+        );
+    }
+    if commands.is_empty() {
+        println!("nothing to relink");
+        return Ok(());
+    }
+    if options.has("dry-run") {
+        println!("would relink {} asset(s): nothing written", commands.len());
+        return Ok(());
+    }
+    let before = project.revision();
+    let mut history = maj_core::History::new();
+    history.apply_group_local(&mut project, commands)?;
+    let out = options.string("out", &path);
+    maj_core::format::save_to_path(&project, &out)?;
+    println!("revision {before} -> {}; wrote {out}", project.revision());
+    Ok(())
+}
+
+/// Applies a document's autosave journal and reports what it did.
+///
+/// Nothing is deleted here, deliberately. A recovery that applied a prefix — because the last
+/// write was cut off — has left work behind that the operator may still want to look at, and
+/// a command that quietly removed the evidence of a partial recovery would make the difference
+/// between "all of it" and "some of it" invisible.
+fn recover(options: &Options) -> Result<(), CliError> {
+    let path = options.required("project")?.to_owned();
+    let mut project = load(&path)?;
+    let journal = journal_path(options).unwrap_or_else(|| maj_core::journal_path_for(&path));
+    let recovery = maj_core::journal::recover(&mut project, &journal)
+        .map_err(|error| CliError::operation(format!("`{}`: {error}", journal.display())))?;
+    println!("journal        {}", journal.display());
+    println!(
+        "entries        {} applied, {} skipped",
+        recovery.applied, recovery.skipped
+    );
+    println!("commands       {}", recovery.commands);
+    println!(
+        "revision       {} -> {}",
+        recovery.revision_before, recovery.revision_after
+    );
+    println!("document hash  {}", recovery.document_hash);
+    if let Some(line) = recovery.unreadable_from {
+        println!(
+            "unreadable     line {line}{} — {}",
+            if recovery.torn_tail {
+                ", a write that was cut off"
+            } else {
+                ""
+            },
+            recovery
+                .unreadable_reason
+                .as_deref()
+                .unwrap_or("no reason given")
+        );
+    }
+    if let Some(line) = recovery.stale_from {
+        println!("stale          from line {line}: the chain broke, so nothing after it applies");
+    }
+    if recovery.is_empty() {
+        println!("nothing recovered: the document is unchanged");
+        return Ok(());
+    }
+    if options.has("dry-run") {
+        println!("would write the recovered document: nothing written");
+        return Ok(());
+    }
+    let out = options.string("out", &path);
+    maj_core::format::save_to_path(&project, &out)?;
+    println!("wrote {out}");
+    println!(
+        "the journal was left in place: remove {} once you are satisfied",
+        journal.display()
+    );
     Ok(())
 }
 

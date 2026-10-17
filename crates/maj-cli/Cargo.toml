@@ -16,6 +16,7 @@ workspace = true
 [dependencies]
 maj-time.workspace = true
 maj-core.workspace = true
+maj-media.workspace = true
 maj-color.workspace = true
 maj-render.workspace = true
 maj-export.workspace = true
@@ -27,3 +28,6 @@ maj-time.workspace = true
 maj-core.workspace = true
 maj-render.workspace = true
 maj-export.workspace = true
+# So a test can check the hash the document recorded against a hash computed by another
+# route, rather than against the function it just called.
+blake3.workspace = true

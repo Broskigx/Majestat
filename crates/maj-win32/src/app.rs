@@ -1320,6 +1320,12 @@ impl App {
         let browsers = self.browser_check(&window)?;
         report.push(browsers);
 
+        // 8g. The marker keys: `m` anchors a note at the playhead, `alt+m` walks its colour
+        //     and `shift+m` takes it away again, all three through the document rather than
+        //     into a decoration the interface keeps to itself.
+        let markers = self.marker_check(&window)?;
+        report.push(markers);
+
         // 9. The pixels: the paint has content, and the zones are inside the window.
         let rect = Rect::new(0, 0, 1440, 900);
         self.touch_all();
@@ -2065,9 +2071,10 @@ impl App {
             // The one tool with no stroke of its own: fitting the sequence, which is a zoom and
             // a scroll together.
             None if matches!(tool, ToolButton::ZoomFit) => self.zoom_fit(),
-            // A tool whose subsystem does not exist yet says so rather than pretending.
+            // A tool with no stroke and no handler of its own says so rather than doing
+            // nothing, which is what a button that looks live has to do.
             None => {
-                self.error = Some(self.say(Key::MarkerOwner).to_owned());
+                self.error = Some(self.say(Key::ToolNotWired).to_owned());
                 self.touch_all();
             }
         }
@@ -2643,6 +2650,112 @@ impl App {
         ))
     }
 
+    /// The marker keys: place a note, walk its colour, take it away.
+    ///
+    /// The three keys are checked through the *document*: a marker that only appeared on screen
+    /// would pass a paint check and be lost on save, and the whole point of the entity is that a
+    /// note an editor places is in the log next to the edit it is about.
+    fn marker_check(&mut self, window: &Window) -> Result<String, String> {
+        let sequence = self
+            .shell
+            .sequence_entity()
+            .map(|sequence| sequence.id())
+            .ok_or("the example project has no sequence to put a marker on")?;
+        let markers = |app: &Self| {
+            app.shell
+                .project()
+                .sequence(sequence)
+                .map_or(0, |sequence| sequence.markers().len())
+        };
+        let revision = self.shell.project().revision();
+        let before = markers(self);
+        // A bare `m` is a stroke on the physical key, not text: the window's own table resolves
+        // it, and the keyboard has to be off every field for that to happen — which is what a
+        // click in the timeline would have left it as.
+        self.title_focus = false;
+        self.timecode_entry = None;
+        // The virtual key that produces `m`, found rather than written down: if the table ever
+        // stops mapping the letter, this check fails here rather than quietly pressing nothing.
+        let m = (0x41_u16..=0x5A)
+            .find(|code| press_for(*code) == Some(Press::Character('m')))
+            .ok_or("no virtual key produces `m`")?;
+        let press = |app: &mut Self, ctrl: bool, shift: bool, alt: bool| {
+            win32::force_modifiers(ctrl, shift, alt);
+            window.post_key(m);
+            window.drain();
+            app.flush(window);
+            win32::force_modifiers(false, false, false);
+        };
+        press(self, false, false, false);
+        let after = markers(self);
+        if after != before + 1 {
+            return Err(format!(
+                "pressing m took the marker count {before} -> {after}"
+            ));
+        }
+        if self.shell.project().revision() != revision + 1 {
+            return Err(format!(
+                "placing a marker moved the revision {revision} -> {}",
+                self.shell.project().revision()
+            ));
+        }
+        let frame = self.shell.playhead();
+        let (name, colour) = self
+            .shell
+            .project()
+            .sequence(sequence)
+            .and_then(|sequence| {
+                sequence
+                    .markers()
+                    .iter()
+                    .find(|marker| marker.covers(frame))
+                    .map(|marker| (marker.name().to_owned(), marker.colour()))
+            })
+            .ok_or("the marker went into the document without covering the playhead")?;
+        let timecode = self
+            .shell
+            .sequence_entity()
+            .and_then(|sequence| sequence.timecode_at(frame).ok())
+            .map(|timecode| timecode.to_string())
+            .unwrap_or_default();
+        if name != timecode {
+            return Err(format!(
+                "the marker named itself {name:?} rather than the timecode {timecode:?}"
+            ));
+        }
+
+        // Alt and the same key walks the colour; the model holds eight, so the walk is a cycle.
+        press(self, false, false, true);
+        let recoloured = self
+            .shell
+            .project()
+            .sequence(sequence)
+            .and_then(|sequence| {
+                sequence
+                    .markers()
+                    .iter()
+                    .find(|marker| marker.covers(frame))
+                    .map(|marker| marker.colour())
+            })
+            .unwrap_or(colour);
+        if recoloured == colour {
+            return Err(format!("alt+m left the marker {colour:?}"));
+        }
+
+        // And shift takes it away again, which leaves the timeline as it was found.
+        press(self, false, true, false);
+        let finally = markers(self);
+        if finally != before {
+            return Err(format!(
+                "shift+m left the marker count at {finally} rather than {before}"
+            ));
+        }
+        Ok(format!(
+            "markers: m put a note at {name} on the playhead, alt+m walked its colour \
+             {colour:?} -> {recoloured:?}, and shift+m took it away again"
+        ))
+    }
+
     /// The two browsers: an effect added to the selection, and a transition added to the track.
     fn browser_check(&mut self, window: &Window) -> Result<String, String> {
         let clip = self
@@ -2856,6 +2969,9 @@ fn binding_name(binding: Binding) -> &'static str {
         Binding::Remove => "remove",
         Binding::Duplicate => "duplicate",
         Binding::ToggleEnabled => "toggle-enabled",
+        Binding::AddMarker => "add-marker",
+        Binding::RemoveMarker => "remove-marker",
+        Binding::CycleMarkerColour => "cycle-marker-colour",
         Binding::Undo => "undo",
         Binding::Redo => "redo",
         Binding::Save => "save",

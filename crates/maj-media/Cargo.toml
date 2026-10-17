@@ -12,6 +12,7 @@ workspace = true
 [dependencies]
 maj-time.workspace = true
 maj-core.workspace = true
-# Hashes a decoder's configuration string into its identity. Pure Rust, already audited in
-# docs/LICENSING.md and already in the workspace for maj-core's content hashing.
+# The identity of a file's bytes, and the hash of a decoder's configuration string. Already
+# in the tree for `maj-core`'s document hashes, so this adds a user rather than a dependency:
+# same version, same `pure` features. See docs/LICENSING.md.
 blake3.workspace = true

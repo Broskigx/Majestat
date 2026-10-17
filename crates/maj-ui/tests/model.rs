@@ -7,8 +7,9 @@
 //! * the state is still a function of the log after the interface has driven it.
 
 use maj_core::{
-    Clip, ClipId, Command, EffectId, EffectInstance, EffectKind, Interpolation, Keyframe, Mask,
-    MaskId, MaskShape, ParamValue, TrackKind, Transition, TransitionId, TransitionKind, format,
+    Clip, ClipId, Command, EffectId, EffectInstance, EffectKind, Interpolation, Keyframe, Marker,
+    MarkerColour, MarkerId, Mask, MaskId, MaskShape, MediaFingerprint, ParamValue, TrackKind,
+    Transition, TransitionId, TransitionKind, format,
 };
 use maj_render::{TitleAlign, TitleFace};
 use maj_time::{Rational, Timebase};
@@ -376,6 +377,7 @@ fn the_name_of_a_command_is_the_name_the_document_stores() {
     let track = entity.tracks().first().expect("a track").id();
     let clip = first_clip(&shell);
     let asset = shell.project().assets().first().expect("an asset").clone();
+    let asset_id = asset.id();
 
     let mask = Mask::new(MaskId::new(900), MaskShape::Rectangle).expect("a mask");
     let transition = Transition::new(
@@ -543,9 +545,37 @@ fn the_name_of_a_command_is_the_name_the_document_stores() {
             track,
             enabled: true,
         },
+        Command::SetSequenceStartTimecode {
+            sequence,
+            frames: 86_400,
+        },
+        Command::RelinkAsset {
+            asset: asset_id,
+            uri: "file:///online/A001C001.mov".to_owned(),
+        },
+        Command::SetAssetFingerprint {
+            asset: asset_id,
+            fingerprint: Some(
+                MediaFingerprint::new("9f2b", 1_024, Some(240)).expect("a fingerprint"),
+            ),
+        },
+        Command::AddMarker {
+            sequence,
+            index: 0,
+            marker: Marker::new(MarkerId::new(903), "regrade", "too warm", 240, 72)
+                .expect("a marker"),
+        },
+        Command::RemoveMarker {
+            sequence,
+            marker: MarkerId::new(903),
+        },
+        Command::SetMarker {
+            sequence,
+            marker: Marker::new(MarkerId::new(903), "regrade", "fixed", 240, 72).expect("a marker"),
+        },
     ];
 
-    assert_eq!(every.len(), 30, "the model has thirty commands");
+    assert_eq!(every.len(), 36, "the model has thirty-six commands");
     let mut seen = std::collections::BTreeSet::new();
     for command in &every {
         let json = serde_json::to_value(command).expect("a command serialises");
@@ -1122,4 +1152,158 @@ fn the_viewer_and_the_export_agree_on_the_pixels_of_a_frame() {
         preview.digest(),
         "tiling is a policy, not a different picture"
     );
+}
+
+#[test]
+fn a_marker_is_named_by_where_it_sits_and_carries_the_hand_that_placed_it() {
+    // The interface has to name it, and the timecode is the one name it can give without
+    // inventing language: it says where the note is, and it reads the same in both languages.
+    // The author is carried on the marker rather than inferred, because a marker outlives the
+    // command that made it and a review reads whose note it is without replaying anything.
+    let shell = demo();
+    let commands = Action::AddMarker {
+        note: String::new(),
+        colour: MarkerColour::Red,
+        author: "ui:local".to_owned(),
+    }
+    .commands(&context(&shell))
+    .expect("a marker can be placed at the playhead");
+    assert_eq!(commands.len(), 1, "one note is one command");
+    let Command::AddMarker {
+        index,
+        marker,
+        sequence,
+    } = &commands[0]
+    else {
+        panic!("adding a marker became {:?}", commands[0]);
+    };
+    assert_eq!(*sequence, shell.sequence_entity().unwrap().id());
+    assert_eq!(*index, 0, "the first marker goes at the head of the list");
+    assert_eq!(marker.frame(), shell.playhead());
+    assert_eq!(
+        marker.length(),
+        0,
+        "a point, which is what most markers are"
+    );
+    assert_eq!(marker.colour(), MarkerColour::Red);
+    assert_eq!(marker.author(), "ui:local");
+    let wanted = shell
+        .sequence_entity()
+        .unwrap()
+        .timecode_at(shell.playhead())
+        .expect("a nameable frame")
+        .to_string();
+    assert_eq!(marker.name(), wanted);
+}
+
+#[test]
+fn the_marker_keys_move_the_document_and_refuse_when_there_is_nothing_to_move() {
+    let mut shell = demo();
+    assert!(
+        shell.dispatch(Action::RemoveMarkerAtPlayhead).is_err(),
+        "there is no marker under the playhead to take away"
+    );
+    assert!(
+        shell.dispatch(Action::CycleMarkerColourAtPlayhead).is_err(),
+        "and none to recolour"
+    );
+    let markers = |shell: &Shell| {
+        shell
+            .sequence_entity()
+            .map(|sequence| sequence.markers().len())
+            .unwrap_or(0)
+    };
+    let before = shell.project().revision();
+    shell
+        .dispatch(Action::AddMarker {
+            note: "regrade this cut".to_owned(),
+            colour: MarkerColour::Blue,
+            author: "ui:local".to_owned(),
+        })
+        .expect("a marker under the playhead");
+    assert_eq!(markers(&shell), 1);
+    assert_eq!(
+        shell.project().revision(),
+        before + 1,
+        "one group, one step"
+    );
+
+    shell
+        .dispatch(Action::CycleMarkerColourAtPlayhead)
+        .expect("a marker under the playhead");
+    let colour = shell
+        .sequence_entity()
+        .unwrap()
+        .markers()
+        .first()
+        .unwrap()
+        .colour();
+    assert_eq!(colour, MarkerColour::Cyan, "blue walks to cyan");
+    assert_eq!(shell.project().revision(), before + 2);
+
+    shell
+        .dispatch(Action::RemoveMarkerAtPlayhead)
+        .expect("a marker under the playhead");
+    assert_eq!(markers(&shell), 0);
+    assert_eq!(shell.project().revision(), before + 3);
+
+    // And the whole thing comes back in three presses, because it went in as three groups.
+    for _ in 0..3 {
+        shell.dispatch(Action::Undo).expect("something to undo");
+    }
+    assert_eq!(markers(&shell), 0);
+    assert_eq!(shell.project().revision(), before);
+}
+
+#[test]
+fn a_session_that_is_cut_off_leaves_its_work_beside_the_document() {
+    // Autosave is not a second document format: it is the groups the session applied since the
+    // last save, written beside the file. The claim worth checking is the strong one — what
+    // comes back out is the document the session would have written, hash and all.
+    let directory = std::env::temp_dir().join(format!("maj-ui-journal-{}", std::process::id()));
+    std::fs::remove_dir_all(&directory).ok();
+    std::fs::create_dir_all(&directory).expect("a scratch directory");
+    let path = directory.join("cut.maj");
+
+    let mut shell = Shell::example("journal tests").expect("the example builds");
+    shell
+        .save_as(&path)
+        .expect("saving gives the session a path");
+    let journal = shell
+        .journal_path()
+        .expect("a saved document autosaves beside itself")
+        .to_path_buf();
+    assert_eq!(journal, maj_core::journal_path_for(&path));
+    let saved_revision = shell.project().revision();
+
+    // Two edits the person never saved, which is exactly what a crash takes away.
+    shell
+        .dispatch(Action::AddMarker {
+            note: "this is the cut".to_owned(),
+            colour: MarkerColour::Green,
+            author: "ui:local".to_owned(),
+        })
+        .expect("a marker");
+    shell
+        .dispatch(Action::CycleMarkerColourAtPlayhead)
+        .expect("a marker to recolour");
+    let expected = shell.project().document_hash().expect("a hash");
+
+    // The process is gone. What is on disk is the document as it was saved, and the journal.
+    let mut reopened = format::load_from_path(&path).expect("the saved document");
+    assert_eq!(reopened.revision(), saved_revision);
+    let recovery = maj_core::journal::recover(&mut reopened, &journal).expect("a journal");
+    assert_eq!(recovery.applied, 2, "both groups were still there");
+    assert_eq!(recovery.skipped, 0);
+    assert_eq!(
+        recovery.document_hash, expected,
+        "the recovered document is the one the session was holding"
+    );
+
+    // And saving empties the journal, because the work is in the document by then.
+    shell.save().expect("the session can save");
+    let text = std::fs::read_to_string(&journal).expect("the journal is still a file");
+    assert!(text.is_empty(), "a save leaves the journal empty: {text:?}");
+
+    std::fs::remove_dir_all(&directory).ok();
 }

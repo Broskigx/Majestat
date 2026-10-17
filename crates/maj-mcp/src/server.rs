@@ -769,7 +769,8 @@ mod tests {
 
     #[test]
     fn a_server_opened_on_a_document_answers_about_it_immediately() {
-        let directory = std::env::temp_dir().join("maj-mcp-server-tests");
+        let directory =
+            std::env::temp_dir().join(format!("maj-mcp-server-tests-{}", std::process::id()));
         std::fs::create_dir_all(&directory).expect("a scratch directory");
         let path = directory.join("opened.maj");
         maj_core::format::save_to_path(&maj_core::Project::new("on disk"), &path)

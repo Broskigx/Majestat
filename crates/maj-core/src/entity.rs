@@ -12,7 +12,102 @@ use crate::composite::{
 };
 use crate::error::CoreError;
 use crate::ids::{ClipId, MediaAssetId, SequenceId, TrackId};
-use crate::ids::{EffectId, MaskId, TransitionId};
+use crate::ids::{EffectId, MarkerId, MaskId, TransitionId};
+
+/// What a file was, measured, so that it can be recognised somewhere else.
+///
+/// A URI says where media *was*. It does not survive a card being re-wrapped, a project
+/// moving between an offline and an online house, or a drive letter changing — and the
+/// failure is worse than a missing file, because reel and clip names collide, so a relink
+/// by name can resolve two different shots to one asset and nothing reports it. You find
+/// out when a frame in the middle of act two is the wrong shot.
+///
+/// So an asset can also carry what it measured. The content hash is the identity; the size
+/// is a cheap first rejection that avoids hashing a file that cannot be the one; and the
+/// duration is the number the model is about to trust for every trim, measured rather than
+/// typed.
+///
+/// **The duration is optional and the hash is not**, because the two measurements are made
+/// by different amounts of the engine. Hashing a file's bytes is `std::fs` and exists today;
+/// reading a duration out of a container needs a probe, which arrives with M2a. A required
+/// duration would therefore force every fingerprint to be taken by a build that cannot take
+/// it — either by refusing to record anything, which loses the relink identity that is the
+/// whole point, or by writing a zero, which is a measurement that never happened. `None`
+/// says the true thing: the bytes were measured and the duration was not.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MediaFingerprint {
+    /// BLAKE3 of the file's bytes, lowercase hex. The identity.
+    pub(crate) content_hash: String,
+    /// Length of the file in bytes.
+    pub(crate) size_bytes: u64,
+    /// Duration as the media itself reported it, in the asset's own frames, when anything
+    /// has read the media well enough to report it.
+    pub(crate) duration_frames: Option<i64>,
+}
+
+impl MediaFingerprint {
+    /// Records a measurement of a file.
+    ///
+    /// `duration_frames` is what a probe reported, or `None` when nothing has read the
+    /// container — see the type's documentation for why that is not the same as zero.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::InvalidArgument`] for an empty hash or a negative duration. A
+    /// fingerprint with no hash in it is not a weaker fingerprint; it is a claim that
+    /// something was measured when nothing was.
+    pub fn new(
+        content_hash: impl Into<String>,
+        size_bytes: u64,
+        duration_frames: Option<i64>,
+    ) -> Result<Self, CoreError> {
+        let content_hash = content_hash.into();
+        if content_hash.trim().is_empty() {
+            return Err(CoreError::invalid("a fingerprint needs a content hash"));
+        }
+        if let Some(frames) = duration_frames {
+            if frames < 0 {
+                return Err(CoreError::invalid("a measured duration cannot be negative"));
+            }
+        }
+        Ok(Self {
+            content_hash,
+            size_bytes,
+            duration_frames,
+        })
+    }
+
+    /// Records the part of a measurement that needs no decoder: the bytes and their count.
+    ///
+    /// This is what a build without a probe can honestly say about a file, and it is
+    /// enough to relink by, because the hash is the identity.
+    ///
+    /// # Errors
+    ///
+    /// As [`MediaFingerprint::new`].
+    pub fn bytes(content_hash: impl Into<String>, size_bytes: u64) -> Result<Self, CoreError> {
+        Self::new(content_hash, size_bytes, None)
+    }
+
+    /// The content hash: the identity this fingerprint relinks by.
+    #[must_use]
+    pub fn content_hash(&self) -> &str {
+        &self.content_hash
+    }
+
+    /// Length of the file in bytes.
+    #[must_use]
+    pub const fn size_bytes(&self) -> u64 {
+        self.size_bytes
+    }
+
+    /// Duration as the media reported it, or `None` when nothing has read it.
+    #[must_use]
+    pub const fn duration_frames(&self) -> Option<i64> {
+        self.duration_frames
+    }
+}
 
 /// A piece of source media on disk.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -25,6 +120,12 @@ pub struct MediaAsset {
     pub(crate) duration_frames: i64,
     pub(crate) has_video: bool,
     pub(crate) has_audio: bool,
+    /// What the file measured, when something has measured it.
+    ///
+    /// `None` means the duration above is a number somebody typed and nothing has checked.
+    /// That is the honest default: this layer performs no I/O, so it cannot measure a file
+    /// — the measurement is taken where files are read and handed down as a command.
+    pub(crate) fingerprint: Option<MediaFingerprint>,
 }
 
 impl MediaAsset {
@@ -49,6 +150,7 @@ impl MediaAsset {
             duration_frames,
             has_video: true,
             has_audio: true,
+            fingerprint: None,
         })
     }
 
@@ -58,6 +160,61 @@ impl MediaAsset {
         self.has_video = has_video;
         self.has_audio = has_audio;
         self
+    }
+
+    /// Records what the file measured.
+    #[must_use]
+    pub fn with_fingerprint(mut self, fingerprint: MediaFingerprint) -> Self {
+        self.fingerprint = Some(fingerprint);
+        self
+    }
+
+    /// What the file measured, if anything has measured it.
+    #[must_use]
+    pub const fn fingerprint(&self) -> Option<&MediaFingerprint> {
+        self.fingerprint.as_ref()
+    }
+
+    /// Whether this asset's duration has been measured rather than asserted.
+    ///
+    /// Every trim in the project is clamped against [`MediaAsset::duration_frames`]. When
+    /// this is false that bound is a number a human typed, so a clip can be trimmed to a
+    /// length the file does not have, pass every check in this crate, and fail at the
+    /// render. A renderer or an exporter that cares should say so in its manifest rather
+    /// than present an unverified bound as a verified one.
+    ///
+    /// A fingerprint that hashed the bytes without reading a duration does **not** make
+    /// this true: the identity is known and the length still is not, and those are two
+    /// different facts about a file.
+    #[must_use]
+    pub fn is_verified(&self) -> bool {
+        self.fingerprint
+            .as_ref()
+            .is_some_and(|measured| measured.duration_frames.is_some())
+    }
+
+    /// Whether this asset's bytes have been measured, which is what relinking needs.
+    ///
+    /// The hash is the identity and the identity is enough: an asset somebody can find
+    /// again by content is relinkable even when nothing has read its container.
+    #[must_use]
+    pub const fn is_identified(&self) -> bool {
+        self.fingerprint.is_some()
+    }
+
+    /// Whether the measured duration disagrees with the declared one.
+    ///
+    /// Reported rather than reconciled: which of the two is right depends on why they
+    /// differ — a re-wrap, a partial copy, the wrong file — and guessing is how the wrong
+    /// shot ends up in the cut. A fingerprint with no duration in it cannot disagree with
+    /// anything.
+    #[must_use]
+    pub fn duration_disagrees(&self) -> bool {
+        self.fingerprint.as_ref().is_some_and(|measured| {
+            measured
+                .duration_frames
+                .is_some_and(|frames| frames != self.duration_frames)
+        })
     }
 
     /// Identifier of this asset.
@@ -525,6 +682,214 @@ impl Track {
     }
 }
 
+/// A note anchored to a span of a sequence.
+///
+/// One entity does the work of several, deliberately. A marker, a comment, a review note
+/// and a chapter point differ in who wrote them and what colour they are, not in what they
+/// *are*: a name, a note and a range of the timeline. Keeping them one entity means an
+/// agent's justification for an edit, a colourist's note and a client's review comment all
+/// anchor the same way and all survive the same replay.
+///
+/// A marker of zero length is a point, which is what most markers are.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Marker {
+    pub(crate) id: MarkerId,
+    pub(crate) name: String,
+    /// The body of the note. Empty for a bare point.
+    pub(crate) note: String,
+    /// Where it starts, as a timeline frame of its sequence.
+    pub(crate) frame: i64,
+    /// How long it covers. Zero is a point.
+    pub(crate) length: i64,
+    /// Which of the eight colours it is drawn in.
+    pub(crate) colour: MarkerColour,
+    /// Who wrote it, in the log's own vocabulary (`ui:local`, `mcp:<client>`).
+    ///
+    /// The author is stored on the marker rather than inferred from the log, because a
+    /// marker outlives the command that made it and a review needs to know whose note it
+    /// is reading without replaying anything.
+    pub(crate) author: String,
+}
+
+/// The eight colours a marker can be, named rather than numbered.
+///
+/// A closed set, because a marker colour is a category an editor filters by, and a free
+/// `#rrggbb` would make "show me every red marker" a string comparison over whatever
+/// anyone happened to pick.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum MarkerColour {
+    /// The default.
+    #[default]
+    Blue,
+    /// Cyan.
+    Cyan,
+    /// Green.
+    Green,
+    /// Yellow.
+    Yellow,
+    /// Red.
+    Red,
+    /// Pink.
+    Pink,
+    /// Purple.
+    Purple,
+    /// White.
+    White,
+}
+
+impl MarkerColour {
+    /// Every colour, in the order an interface lists them.
+    pub const ALL: [Self; 8] = [
+        Self::Blue,
+        Self::Cyan,
+        Self::Green,
+        Self::Yellow,
+        Self::Red,
+        Self::Pink,
+        Self::Purple,
+        Self::White,
+    ];
+
+    /// The short stable name, which is what the document stores.
+    #[must_use]
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::Blue => "blue",
+            Self::Cyan => "cyan",
+            Self::Green => "green",
+            Self::Yellow => "yellow",
+            Self::Red => "red",
+            Self::Pink => "pink",
+            Self::Purple => "purple",
+            Self::White => "white",
+        }
+    }
+
+    /// The colour with this name, if there is one.
+    #[must_use]
+    pub fn from_key(name: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|colour| colour.key().eq_ignore_ascii_case(name.trim()))
+    }
+}
+
+impl Marker {
+    /// Anchors a note to a sequence.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::InvalidArgument`] for a negative frame or length, or for a
+    /// marker with neither a name nor a note — an anonymous empty point is a thing nobody
+    /// placed on purpose, and the model refuses it rather than cluttering a timeline with
+    /// marks that say nothing.
+    pub fn new(
+        id: MarkerId,
+        name: impl Into<String>,
+        note: impl Into<String>,
+        frame: i64,
+        length: i64,
+    ) -> Result<Self, CoreError> {
+        let name = name.into();
+        let note = note.into();
+        if frame < 0 {
+            return Err(CoreError::invalid("a marker cannot sit before frame zero"));
+        }
+        if length < 0 {
+            return Err(CoreError::invalid("a marker cannot have a negative length"));
+        }
+        if name.trim().is_empty() && note.trim().is_empty() {
+            return Err(CoreError::invalid(
+                "a marker needs a name or a note to be worth placing",
+            ));
+        }
+        Ok(Self {
+            id,
+            name,
+            note,
+            frame,
+            length,
+            colour: MarkerColour::Blue,
+            author: crate::command::DEFAULT_AUTHOR.to_owned(),
+        })
+    }
+
+    /// The same marker in another colour.
+    #[must_use]
+    pub const fn with_colour(mut self, colour: MarkerColour) -> Self {
+        self.colour = colour;
+        self
+    }
+
+    /// The same marker attributed to someone else.
+    #[must_use]
+    pub fn with_author(mut self, author: impl Into<String>) -> Self {
+        self.author = author.into();
+        self
+    }
+
+    /// Identifier of this marker.
+    #[must_use]
+    pub const fn id(&self) -> MarkerId {
+        self.id
+    }
+
+    /// Short name, shown on the timeline.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// The body of the note.
+    #[must_use]
+    pub fn note(&self) -> &str {
+        &self.note
+    }
+
+    /// Timeline frame it starts on.
+    #[must_use]
+    pub const fn frame(&self) -> i64 {
+        self.frame
+    }
+
+    /// How many frames it covers. Zero is a point.
+    #[must_use]
+    pub const fn length(&self) -> i64 {
+        self.length
+    }
+
+    /// Its colour.
+    #[must_use]
+    pub const fn colour(&self) -> MarkerColour {
+        self.colour
+    }
+
+    /// Who wrote it.
+    #[must_use]
+    pub fn author(&self) -> &str {
+        &self.author
+    }
+
+    /// The span it covers, or `None` when it is a point.
+    #[must_use]
+    pub fn range(&self) -> Option<FrameRange> {
+        (self.length > 0)
+            .then(|| FrameRange::from_start_len(self.frame, self.length).ok())
+            .flatten()
+    }
+
+    /// Whether this marker covers a timeline frame.
+    #[must_use]
+    pub const fn covers(&self, frame: i64) -> bool {
+        if self.length == 0 {
+            return frame == self.frame;
+        }
+        frame >= self.frame && frame < self.frame.saturating_add(self.length)
+    }
+}
+
 /// A timeline: a timebase, a frame size, and its tracks.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -535,7 +900,25 @@ pub struct Sequence {
     pub(crate) width: u32,
     pub(crate) height: u32,
     pub(crate) sample_rate: u32,
+    /// What timecode frame zero of this sequence is called, as a frame count.
+    ///
+    /// It is **a label, not a position**: frame zero is still frame zero, and every
+    /// internal number stays an index from it. This is the offset added when a frame is
+    /// *named*, which is what an EDL, a burn-in, a QC report and a conform all speak.
+    ///
+    /// It is stored as an integer frame count at this sequence's timebase rather than as
+    /// `"01:00:00:00"`, for the same reason everything else here is: a string would have to
+    /// be parsed to be arithmetic, and the drop-frame rule that decides what
+    /// `01:00:00;00` means belongs to [`maj_time::Timecode`], which already has it. A
+    /// document that stored the text would be a document that had two answers.
+    pub(crate) start_timecode_frames: i64,
     pub(crate) tracks: Vec<Track>,
+    /// Notes anchored to this timeline, in the order they were placed.
+    ///
+    /// Order is the log's, not the playhead's: a list sorted by frame would reorder itself
+    /// when a marker moves, and the document would stop being a function of its commands.
+    /// Sorting for display is the interface's business.
+    pub(crate) markers: Vec<Marker>,
 }
 
 impl Sequence {
@@ -563,8 +946,22 @@ impl Sequence {
             width,
             height,
             sample_rate,
+            start_timecode_frames: 0,
             tracks: Vec::new(),
+            markers: Vec::new(),
         })
+    }
+
+    /// The notes anchored to this timeline, in the order they were placed.
+    #[must_use]
+    pub fn markers(&self) -> &[Marker] {
+        &self.markers
+    }
+
+    /// The marker with this identifier, if it is on this sequence.
+    #[must_use]
+    pub fn marker(&self, id: MarkerId) -> Option<&Marker> {
+        self.markers.iter().find(|marker| marker.id == id)
     }
 
     /// Converts a clock delta while preserving the original value.
@@ -572,6 +969,60 @@ impl Sequence {
     pub fn with_timebase(mut self, timebase: Timebase) -> Self {
         self.timebase = timebase;
         self
+    }
+
+    /// Names frame zero, as a frame count at this sequence's timebase.
+    ///
+    /// The broadcast convention is an hour — `01:00:00:00` — so that the first frame of
+    /// programme is not `00:00:00:00` and a pre-roll has somewhere to live. Use
+    /// [`Sequence::start_timecode`] to read it back as a timecode.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::InvalidArgument`] for a negative offset: a sequence whose
+    /// frame zero is named by a timecode before zero has no meaning on any tape or in any
+    /// EDL, and silently clamping it would hide a conform error.
+    pub fn with_start_timecode_frames(mut self, frames: i64) -> Result<Self, CoreError> {
+        if frames < 0 {
+            return Err(CoreError::invalid(
+                "a sequence's start timecode cannot be before zero",
+            ));
+        }
+        self.start_timecode_frames = frames;
+        Ok(self)
+    }
+
+    /// What frame zero of this sequence is called, as a frame count.
+    #[must_use]
+    pub const fn start_timecode_frames(&self) -> i64 {
+        self.start_timecode_frames
+    }
+
+    /// What frame zero of this sequence is called, as a timecode.
+    ///
+    /// # Errors
+    ///
+    /// Returns the time layer's error when the offset cannot be expressed at this
+    /// timebase, which is how a rate that cannot carry a timecode says so rather than
+    /// rounding.
+    pub fn start_timecode(&self) -> Result<maj_time::Timecode, maj_time::TimeError> {
+        maj_time::Timecode::from_frames_preferred(self.start_timecode_frames, self.timebase)
+    }
+
+    /// What a timeline frame of this sequence is called.
+    ///
+    /// This is the only place a frame index becomes a name, and it is the sum the whole
+    /// field means by "timecode": the sequence's start plus the frame's own index.
+    ///
+    /// # Errors
+    ///
+    /// Returns the time layer's error when the result cannot be expressed at this
+    /// timebase.
+    pub fn timecode_at(&self, frame: i64) -> Result<maj_time::Timecode, maj_time::TimeError> {
+        maj_time::Timecode::from_frames_preferred(
+            self.start_timecode_frames.saturating_add(frame),
+            self.timebase,
+        )
     }
 
     /// Identifier of this sequence.
@@ -899,5 +1350,182 @@ mod tests {
         let silent = ok.clone().with_streams(true, false);
         assert!(silent.has_video());
         assert!(!silent.has_audio());
+    }
+}
+
+#[cfg(test)]
+mod p1_tests {
+    use super::*;
+    use crate::ids::{MarkerId, MediaAssetId, SequenceId};
+
+    #[test]
+    fn a_start_timecode_names_frame_zero_without_moving_anything() {
+        // The broadcast convention: programme starts at an hour, so a pre-roll has
+        // somewhere to live and the first frame is not 00:00:00:00.
+        let sequence = Sequence::new(
+            SequenceId::new(1),
+            "S",
+            Timebase::FPS_25,
+            1920,
+            1080,
+            48_000,
+        )
+        .unwrap()
+        .with_start_timecode_frames(25 * 60 * 60)
+        .unwrap();
+
+        let start = sequence.start_timecode().unwrap();
+        assert_eq!(
+            (
+                start.hours(),
+                start.minutes(),
+                start.seconds(),
+                start.frames()
+            ),
+            (1, 0, 0, 0)
+        );
+        // It is a label: frame zero is still frame zero, and frame 50 is still frame 50.
+        let two_seconds_in = sequence.timecode_at(50).unwrap();
+        assert_eq!(
+            (
+                two_seconds_in.hours(),
+                two_seconds_in.minutes(),
+                two_seconds_in.seconds(),
+                two_seconds_in.frames()
+            ),
+            (1, 0, 2, 0)
+        );
+        assert_eq!(sequence.start_timecode_frames(), 90_000);
+    }
+
+    #[test]
+    fn a_start_timecode_before_zero_is_refused() {
+        // No tape and no EDL can express it, and clamping it silently would hide a
+        // conform error rather than report one.
+        let sequence = Sequence::new(
+            SequenceId::new(1),
+            "S",
+            Timebase::FPS_25,
+            1920,
+            1080,
+            48_000,
+        )
+        .unwrap();
+        assert!(sequence.with_start_timecode_frames(-1).is_err());
+    }
+
+    #[test]
+    fn an_asset_says_whether_its_duration_was_measured_or_typed() {
+        // This is the weakest claim the engine used to make: every trim in the project is
+        // clamped against a number somebody typed, and nothing had checked it.
+        let asset = MediaAsset::new(
+            MediaAssetId::new(1),
+            "shot.mov",
+            "file:///shot.mov",
+            Timebase::FPS_24,
+            2_400,
+        )
+        .unwrap();
+        assert!(!asset.is_verified(), "nothing has measured it yet");
+        assert!(!asset.duration_disagrees(), "and nothing can disagree yet");
+
+        let measured = asset
+            .clone()
+            .with_fingerprint(MediaFingerprint::new("abc123", 1_048_576, Some(2_400)).unwrap());
+        assert!(measured.is_verified());
+        assert!(!measured.duration_disagrees());
+
+        // A re-wrap, a partial copy or the wrong file: reported, never reconciled, because
+        // which of the two numbers is right depends on why they differ.
+        let shorter =
+            asset.with_fingerprint(MediaFingerprint::new("abc123", 512, Some(2_380)).unwrap());
+        assert!(shorter.is_verified());
+        assert!(shorter.duration_disagrees());
+    }
+
+    #[test]
+    fn hashing_the_bytes_is_not_the_same_as_measuring_the_duration() {
+        // The two measurements are made by different amounts of the engine: hashing a file
+        // is `std::fs`, and reading a duration out of a container needs a probe that does
+        // not exist yet. So there are three states, and the model has to tell them apart
+        // rather than collapse the middle one into either end.
+        let unmeasured = MediaAsset::new(
+            MediaAssetId::new(1),
+            "shot.mov",
+            "file:///shot.mov",
+            Timebase::FPS_24,
+            2_400,
+        )
+        .unwrap();
+        assert!(!unmeasured.is_identified(), "nothing has read it at all");
+        assert!(!unmeasured.is_verified());
+
+        // The bytes are known and the length is not: enough to find the file again, not
+        // enough to trust a trim against it.
+        let hashed = unmeasured
+            .clone()
+            .with_fingerprint(MediaFingerprint::bytes("9f2b", 1_048_576).unwrap());
+        assert!(
+            hashed.is_identified(),
+            "the identity is what a relink matches on"
+        );
+        assert!(
+            !hashed.is_verified(),
+            "the declared duration is still a number somebody typed"
+        );
+        assert!(
+            !hashed.duration_disagrees(),
+            "a duration nobody measured cannot disagree with anything"
+        );
+        assert_eq!(hashed.fingerprint().unwrap().duration_frames(), None);
+
+        // And the third state: both measured.
+        let both = unmeasured
+            .with_fingerprint(MediaFingerprint::new("9f2b", 1_048_576, Some(2_400)).unwrap());
+        assert!(both.is_identified() && both.is_verified());
+        assert_eq!(both.fingerprint().unwrap().duration_frames(), Some(2_400));
+    }
+
+    #[test]
+    fn a_fingerprint_without_a_hash_is_refused() {
+        // A fingerprint with no identity in it is not a weaker fingerprint: it is a claim
+        // that something was measured when nothing was.
+        assert!(MediaFingerprint::new("", 10, Some(10)).is_err());
+        assert!(MediaFingerprint::new("   ", 10, Some(10)).is_err());
+        assert!(MediaFingerprint::new("abc", 10, Some(-1)).is_err());
+    }
+
+    #[test]
+    fn a_marker_is_a_point_or_a_span_and_needs_something_to_say() {
+        let point = Marker::new(MarkerId::new(1), "look here", "", 100, 0).unwrap();
+        assert!(point.covers(100));
+        assert!(!point.covers(101));
+        assert_eq!(point.range(), None, "a point covers no range");
+
+        let span = Marker::new(MarkerId::new(2), "this bit", "regrade", 100, 50).unwrap();
+        assert!(span.covers(100) && span.covers(149));
+        assert!(
+            !span.covers(150),
+            "the end is exclusive, as everywhere else"
+        );
+        assert_eq!(span.range().map(|range| range.len()), Some(50));
+
+        // A marker that says nothing is a mark nobody placed on purpose.
+        assert!(Marker::new(MarkerId::new(3), "", "", 0, 0).is_err());
+        assert!(Marker::new(MarkerId::new(3), "  ", " ", 0, 0).is_err());
+        assert!(Marker::new(MarkerId::new(3), "x", "", -1, 0).is_err());
+        assert!(Marker::new(MarkerId::new(3), "x", "", 0, -1).is_err());
+    }
+
+    #[test]
+    fn a_marker_colour_is_a_closed_set_with_stable_names() {
+        // Closed, because a colour is a category an editor filters by; a free #rrggbb
+        // would make "every red marker" a string comparison over whatever anyone picked.
+        for colour in MarkerColour::ALL {
+            assert_eq!(MarkerColour::from_key(colour.key()), Some(colour));
+        }
+        assert_eq!(MarkerColour::from_key(" RED "), Some(MarkerColour::Red));
+        assert_eq!(MarkerColour::from_key("chartreuse"), None);
+        assert_eq!(MarkerColour::default(), MarkerColour::Blue);
     }
 }

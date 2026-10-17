@@ -373,10 +373,10 @@ pub enum Key {
     ExportPath,
     /// The label of the effect controls' numeric range.
     EffectsRange,
-    /// The toolbar's marker tool, which the model cannot hold yet.
+    /// The toolbar's marker tool, which places a note at the playhead.
     MarkerTool,
-    /// Why the marker tool does nothing: the phase that owns the entity.
-    MarkerOwner,
+    /// Why a tool does nothing: nothing is behind it yet.
+    ToolNotWired,
     /// The left column's tab for the title studio.
     TabTitles,
     /// The right column's tab for the list of effects.
@@ -631,7 +631,7 @@ pub const fn en(key: Key) -> &'static str {
         Key::ExportPath => "To",
         Key::EffectsRange => "Range",
         Key::MarkerTool => "Add marker",
-        Key::MarkerOwner => "Markers arrive with M6: the model has no marker entity yet.",
+        Key::ToolNotWired => "That tool has no action behind it yet.",
         Key::TabTitles => "Titles",
         Key::BrowserEffects => "Effects",
         Key::BrowserTransitions => "Transitions",
@@ -863,7 +863,7 @@ pub const fn es(key: Key) -> &'static str {
         Key::ExportPath => "Destino",
         Key::EffectsRange => "Rango",
         Key::MarkerTool => "Añadir marcador",
-        Key::MarkerOwner => "Los marcadores llegan con M6: el modelo aún no los tiene.",
+        Key::ToolNotWired => "Esa herramienta todavía no tiene ninguna acción detrás.",
         Key::TabTitles => "Títulos",
         Key::BrowserEffects => "Efectos",
         Key::BrowserTransitions => "Transiciones",
@@ -1090,7 +1090,7 @@ mod tests {
         Key::ExportPath,
         Key::EffectsRange,
         Key::MarkerTool,
-        Key::MarkerOwner,
+        Key::ToolNotWired,
         Key::TabTitles,
         Key::BrowserEffects,
         Key::BrowserTransitions,

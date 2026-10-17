@@ -4,7 +4,7 @@
 //! with a band along the top and a gradient body rather than as flat blocks, and a selected clip
 //! carries the two grab handles a pointer can take hold of.
 
-use maj_core::TrackKind;
+use maj_core::{MarkerColour, TrackKind};
 use maj_ui::{Key, Timecode, TimecodeMode, text};
 
 use crate::app::App;
@@ -170,8 +170,8 @@ fn tools(hdc: Hdc, frame: &Frame, app: &mut App) {
         let active = matches!(tool, Tool::Snap) && app.shell.view().snap
             || matches!(tool, Tool::Link) && app.shell.view().link;
         let usable = if matches!(tool, Tool::Marker) {
-            // The model has no marker entity until M6; the button is drawn, and refuses.
-            false
+            // A marker anchors to a sequence, so with none open there is nowhere to put one.
+            app.shell.sequence_entity().is_some()
         } else {
             !matches!(
                 tool,
@@ -229,6 +229,19 @@ fn ruler(
     if lane.is_empty() {
         return;
     }
+    // The markers, read out before anything is drawn: the borrow of the document ends here,
+    // and the painter below is free to record the zones it registers.
+    let markers: Vec<(i64, i64, MarkerColour)> = app
+        .shell
+        .sequence_entity()
+        .map(|sequence| {
+            sequence
+                .markers()
+                .iter()
+                .map(|marker| (marker.frame(), marker.length(), marker.colour()))
+                .collect()
+        })
+        .unwrap_or_default();
     let theme = &app.theme;
     win32::fill_colour(hdc, rect, theme.ground);
     win32::fill_colour(
@@ -236,6 +249,35 @@ fn ruler(
         Rect::new(rect.left, rect.bottom - 1, rect.right, rect.bottom),
         theme.separator,
     );
+    // A marker is drawn in the ruler's top band, in the colour the *document* gave it rather
+    // than one from the theme: a colour is a category an editor filters by, so it cannot
+    // change with the ground the application is drawn on. A point is a flag at its frame and a
+    // span is a band across what it covers, with the flag at its head.
+    for (start, length, colour) in &markers {
+        let x = x_of(*start, scroll, zoom, lane.left);
+        if x < lane.left - 8 || x > lane.right + 8 {
+            continue;
+        }
+        let ink = marker_ink(*colour);
+        if *length > 0 {
+            let end = x_of(start.saturating_add(*length), scroll, zoom, lane.left);
+            win32::fill_colour(
+                hdc,
+                Rect::new(x, rect.top, end.max(x + 1), rect.top + 3),
+                ink,
+            );
+        }
+        win32::fill_colour(
+            hdc,
+            Rect::new(x, rect.top, x + theme.metrics.px(2), rect.bottom - 1),
+            ink,
+        );
+        win32::fill_colour(
+            hdc,
+            Rect::new(x, rect.top, x + theme.metrics.px(7), rect.top + 3),
+            ink,
+        );
+    }
     let mode = TimecodeMode::preferred_for(timebase);
     let step = step_for(zoom, fps);
     let first = scroll - scroll.rem_euclid(step);
@@ -287,6 +329,24 @@ fn ruler(
             CursorKind::Horizontal,
             Key::TransportScrub,
         ));
+    }
+}
+
+/// The ink a marker is drawn in, from the eight names the model stores.
+///
+/// Hand-picked rather than derived from the accent, because these are eight *categories*: a
+/// red marker has to read as red on a light ground and on a dark one, and be tellable from
+/// pink at the size the ruler draws it.
+fn marker_ink(colour: MarkerColour) -> win32::Colour {
+    match colour {
+        MarkerColour::Blue => win32::Colour::hex(0x4A_8B_E8),
+        MarkerColour::Cyan => win32::Colour::hex(0x3A_C8_D0),
+        MarkerColour::Green => win32::Colour::hex(0x62_B8_5A),
+        MarkerColour::Yellow => win32::Colour::hex(0xE8_B4_4A),
+        MarkerColour::Red => win32::Colour::hex(0xE0_5A_50),
+        MarkerColour::Pink => win32::Colour::hex(0xE0_7A_B0),
+        MarkerColour::Purple => win32::Colour::hex(0x9A_6A_E0),
+        MarkerColour::White => win32::Colour::hex(0xF0_F0_F0),
     }
 }
 
