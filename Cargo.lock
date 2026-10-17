@@ -187,6 +187,7 @@ dependencies = [
 name = "maj-media"
 version = "0.0.1"
 dependencies = [
+ "blake3",
  "maj-core",
  "maj-time",
 ]
@@ -214,6 +215,7 @@ dependencies = [
  "maj-color",
  "maj-core",
  "maj-graph",
+ "maj-media",
  "maj-playback",
  "maj-time",
  "miniz_oxide",

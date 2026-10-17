@@ -26,6 +26,49 @@
 //!   `forbid`. That relaxes a workspace-wide lint, so it needs an ADR of its own weight
 //!   and is deliberately not decided in a module comment. See `docs/MEDIA.md` §8.
 
+//! # What is built here, and what is not
+//!
+//! M2a is the vocabulary and the probe path, with **no FFI at all**: the types of §3 and §4 of
+//! that design, a backend that reads container headers in Rust ([`NativeBackend`]), and a
+//! cache in front of it so a question about a file costs a stat and not a read. Three things
+//! follow from that order, and they are the reason for it:
+//!
+//! * The layering is provable before a decoder exists. This crate names no renderer and no
+//!   layer-3 type, and the closed [`ContainerKind`] vocabulary is what a manifest will say.
+//! * The debt `PictureResolver::kind` has been carrying — a present-but-damaged file named
+//!   for its container while the frame beside it said `damaged` — is repaid by [`ProbeCache`]
+//!   without a decoder being written.
+//! * The `unsafe` decision stays M2b's, made against a measured crash rate over the corpus
+//!   rather than against a prediction.
+//!
+//! No frame is decoded by anything in this crate. [`MediaBackend::open_video`] refuses with
+//! `undecodable`, which has always been the honest label for a build with no decoder in it.
+
+mod cache;
+mod container;
+pub mod corpus;
+mod decode;
+mod error;
+mod native;
+mod picture;
+mod probe;
+mod stream;
+
+pub use cache::ProbeCache;
+pub use container::ContainerKind;
+pub use decode::{DecodedFrame, Plane, VideoReader};
+pub use error::MediaError;
+pub use native::NativeBackend;
+pub use picture::{
+    BitDepth, ChromaSiting, ColourMatrix, ColourPrimaries, PictureFormat, PlaneLayout, SampleRange,
+    TransferCharacteristics,
+};
+pub use probe::{DecoderIdentity, HardwareSupport, MediaBackend, MediaProbe};
+pub use stream::{
+    AudioStream, CodecKind, FieldOrder, FrameRateKind, Rotation, StreamInfo, StreamRole,
+    VideoStream,
+};
+
 /// Human-readable statement of this crate's responsibility.
 pub const ROLE: &str = "media I/O: probe, demux, decode, seek, waveforms, thumbnails";
 

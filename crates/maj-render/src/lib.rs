@@ -37,12 +37,14 @@
 pub mod compose;
 pub mod effect;
 pub mod framebuffer;
+pub mod media;
 pub mod render;
 pub mod source;
 
 pub use compose::{Placement, blend, blend_channel, composite, mask_coverage, rational_to_f64};
 pub use effect::{EffectContext, apply, chain_halo, spatial_support};
 pub use framebuffer::{BitDepth, CHANNELS, Framebuffer, Pixel};
+pub use media::MediaResolver;
 pub use render::{
     FrameGeometry, LayerRecord, RENDER_MANIFEST_SCHEMA, RenderError, RenderManifest, RenderPolicy,
     RenderReport, RenderRequest, RenderTask, Window, frame_halo, render_frame, render_tiled,

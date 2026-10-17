@@ -1,6 +1,6 @@
 # State
 
-Updated: 2026-10-15
+Updated: 2026-10-16
 
 ## P0 of the ultra plan: the three things that were blocking a decision
 
@@ -219,6 +219,86 @@ runs. The scratch directories are per-test with unique names, so it is not a fix
 collision; the likeliest explanation is the tree changing underneath the run. **The
 assertion was not weakened and the test was not "fixed"** — an unreproduced failure with a
 plausible external cause belongs in the record, and this is the first sighting.
+
+## M2a: the media vocabulary and a probe, with no FFI at all
+
+**`maj-media` carries code.** The scaffold is now a layer-2 crate with the vocabulary of
+`docs/MEDIA.md` §3 and §4 in it, a probe path behind `MediaBackend`, a cache in front of that,
+and an adapter in `maj-render`. **No FFmpeg, no `unsafe`, no FFI**, and no decoder: reading a
+container's headers is reading a documented byte layout, so the half of M2 that needs no C
+library was built first — which is what lets §8's `unsafe` decision be made in M2b against a
+**measured** crash rate rather than a prediction.
+
+**The corpus exists, and it is thirty-nine files, not a hundred.** `testdata/media-corpus/`
+described a corpus and committed none of it. There is now a committed generator —
+`maj_media::corpus`, run by `cargo run -p maj-media --example make-corpus` — that writes
+thirty-nine files byte by byte into the git-ignored `media/` directory the README nominates,
+with a manifest recording each file's generation command and the reading a probe of it must
+produce. No encoder was needed and none is installed: every file's sample data is deliberate
+filler, because probe reads headers.
+
+The gate, measured on this machine:
+
+```
+cargo run -p maj-media --example make-corpus     39 files, 30 readable, 9 refused on purpose
+cargo test -p maj-media --test corpus            7 tests: 39/39 probe exactly as declared
+                                                 ~2,500 truncations, ~5,000 flipped bytes
+                                                 zero panics
+cargo fmt --all -- --check                       exit 0
+cargo clippy --workspace --all-targets -- -D warnings   exit 0   no warnings
+cargo test --workspace                           exit 0   663 tests, 55 test targets
+cargo doc --workspace --no-deps                  exit 0   no warnings
+```
+
+**Zero crashes over the corpus, and the three gate axes read correctly**: rotation as a
+quarter-turn count off a `tkhd` display matrix (90, 180 and 270, with the displayed size
+turning with it), field order off a `fiel` box in all four spellings the format has, and a
+variable frame rate as the exact per-frame timestamps off an `stts` run-length table, where
+the index-to-timestamp map is a lookup and not a multiplication. Those are three files, three
+files and one file of the thirty-nine; the others carry rates from 23.976 to 60, eight to
+twelve bits, 4:2:0 through 4:4:4, full and limited range, a 16:15 sample aspect, 5.1 sound at
+48 kHz and 24-bit mono at 44.1, four containers, a timecode track that is counted and not
+read, nine million frames in one table entry, and nine pathologies.
+
+**Thirty-nine files is not the hundred-file gate, and this phase does not claim it.** What a synthetic corpus cannot reach is stated in code, in `corpus::NOT_COVERED`,
+printed by the generator and repeated in the corpus README: **coded pictures** (the sample
+data is filler, so no codec's bitstream is exercised past the parameter set that states chroma
+and depth), **real codecs**, **camera RAW**, **real HDR and log footage**, **MXF**,
+**genuinely damaged media** (these pathologies are damage this workspace caused on purpose),
+**image sequences**, and **surround mixing**. Those need real files with their provenance
+recorded, which is the owner's time and not an agent's. The honest claim is: the prober
+survives thirty-nine synthetic files and some seven thousand hostile mutations of them, and
+the hundred-file gate is still open.
+
+**The `kind` debt is repaid.** `maj-render::MediaResolver` answers `PictureResolver::kind`
+from a cached probe, so a **present-but-damaged** file is named `damaged` in the manifest as
+well as in the frame — the exact defect recorded in the debts table below. Two further things
+fell out of it, neither planned:
+
+* **A missing movie is `offline`, not `undecodable`.** `WorkspaceResolver` has no parser for a
+  `.mov`, so it said `undecodable` whether the file was there or not, and "wait for a decoder"
+  is the wrong instruction for a file that has moved.
+* **A still is opened as the container its bytes are**, not as the one its name claims. A PNG
+  called `.mp4` was named `png` by `kind` and drawn as `undecodable` by `resolve` until a test
+  of that invariant over the whole corpus caught it. The invariant — `kind` names what
+  `resolve` would produce — is now checked over all thirty-nine files under both
+  `MissingMedia` policies.
+
+**One crash was found and fixed at its cause**, by the byte-flip sweep rather than by review:
+a Matroska length eight bytes wide made `0xFF_u8 >> 8` overflow, which is a panic and not a
+zero. It is fixed with a checked shift and kept as a named regression test, as the corpus
+README asks.
+
+Four departures from `docs/MEDIA.md` are recorded in that document's new §8a rather than
+quietly taken: the transfer function is this crate's own H.273 code points (layer 3 is **not**
+reachable from layer 2, and the design's comment saying otherwise was wrong), a stream's
+timebase is an `Option` because a still imposes no rate, `ContainerKind` gained `Png` and
+`Ppm` because the manifest already says them, and `maj-render`'s dependency on `maj-media` is
+not optional because there is no C library behind it to gate.
+
+What this does **not** do: decode a frame. `MediaBackend::open_video` refuses with
+`undecodable`, every movie still draws a labelled placeholder, and the viewer is still empty.
+That is M2b, and the shape above does not change when it arrives — `resolve` gains a branch.
 
 ## Position
 
@@ -644,7 +724,9 @@ excluded. See `docs/LICENSING.md`.
 | Log replay is quadratic in project size | ADR 0002 | Only if measured to matter; the escape hatch is snapshots plus a tail |
 | `maj-timeline` is a separate crate from `maj-core` but the editorial operations are not yet extracted | `docs/ARCHITECTURE.md` | M6 |
 | `wgpu` is not yet a dependency, so the render path is untested | ADR 0004 | M4 |
-| `PictureResolver::kind` costs a stat and cannot tell a damaged file from a readable one without reading it, so a manifest names a present-but-damaged still for its container while the frame gets a `damaged` placeholder | `maj-render/src/source.rs` | M2, when the decoder can answer the question cheaply from its own probe |
+| ~~`PictureResolver::kind` costs a stat and cannot tell a damaged file from a readable one without reading it~~ | ~~`maj-render/src/source.rs`~~ | **Repaid in M2a**: `MediaResolver` answers from a cached probe, which is a header read and never a decode. `WorkspaceResolver` on its own still has the limitation, and its documentation still says so — it has no prober in it |
+| A probe is reused while a file's length and modification time are unchanged, which is not a content hash: a file rewritten in place, to the same length, inside the timestamp's resolution, goes unnoticed | `maj_media::ProbeCache` | Only if measured to matter. Hashing on every `kind` call would cost a full read, which is the one cost that seam forbids; `invalidate` is the escape hatch, and P1's `measure` is the other half of the answer |
+| The synthetic corpus is written and read by this workspace, so a misunderstanding both halves share cannot be caught by it | `maj_media::corpus` | Retired by real media, not by more synthesis. The pathologies are hostile whatever wrote them, which is the part that holds regardless |
 | The grouping of commands into one undo step is session state, so it does not survive a save — a reopened project undoes command by command | `maj_core::History` | Only if it turns out to matter; recording the grouping in the log would make it part of the document, which is a bigger decision than it looks |
 
 ## Working agreements

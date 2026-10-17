@@ -12,6 +12,11 @@ workspace = true
 [dependencies]
 maj-time.workspace = true
 maj-core.workspace = true
+# Layer 2's media vocabulary and its probe, for the `MediaResolver` adapter. Not an optional
+# dependency: `docs/MEDIA.md` §2 made it optional because it expected FFmpeg behind it, and
+# the backend this build has is pure Rust with nothing to gate. M2b's FFI crate is where an
+# optional dependency belongs.
+maj-media.workspace = true
 maj-color.workspace = true
 maj-graph.workspace = true
 maj-playback.workspace = true

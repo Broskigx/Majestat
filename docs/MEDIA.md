@@ -414,6 +414,38 @@ prediction.
 project-level decision of the same weight as ADR 0013, and this document's job is to show
 that the design has a place for the answer, not to pick it unilaterally.
 
+## 8a. What M2a built, and the four places it departs from this document
+
+M2a is step 1 and step 3 of §9 without step 2: the vocabulary, and a probe path with **no
+FFI**, because reading a container's headers is reading a documented byte layout and needs no
+C library. That ordering is what lets the `unsafe` decision in §8 be made against a measured
+crash rate instead of a prediction, and it repays the `kind` debt immediately.
+
+Four things in the design above turned out to be wrong or incomplete when built. Each is
+recorded here rather than quietly diverged from:
+
+* **`PictureFormat::transfer` is not `maj_color::TransferFunction`.** §4's comment calls
+  layer 3 allowed from layer 2; it is not, and the architecture is right. `maj-media` declares
+  ITU-T H.273 **code points** — which is what a container actually states, including the
+  "unspecified" that most files state — and mapping them onto a rendering curve is a colour
+  decision made once, in the layer-4 adapter, where the rest of them live.
+* **`VideoStream::timebase` is `Option<Timebase>`.** A single still imposes no rate. Typing it
+  as a bare `Timebase` would mean inventing a frames-per-second figure for a PNG, and a
+  number in a manifest that no file ever stated is worse than an absence that says so.
+* **`ContainerKind` has `Png` and `Ppm`.** The manifest already says `png` and `ppm`, and a
+  closed vocabulary that cannot spell what the renderer already writes is not closed, it is
+  incomplete. `ImageSequence` stays for the numbered-run case, which has no probe path yet.
+* **`maj-render`'s dependency on `maj-media` is not optional.** §7 made it optional because it
+  expected FFmpeg behind it; the backend this build has is pure Rust and there is nothing to
+  gate. M2b's FFI crate is where an optional dependency belongs.
+
+`MediaResolver` exists, with `resolve` delegating to the still readers and refusing moving
+pictures — and one correction to §7's sketch, found by testing the invariant rather than
+assuming it: **the adapter opens a still as the container its bytes turned out to be**, not by
+handing the URI back to `WorkspaceResolver`, which dispatches on the extension. Otherwise a
+PNG named `.mp4` is named `png` by `kind` and drawn as `undecodable` by `resolve` — one file,
+two answers, which is the defect this adapter exists to close.
+
 ## 9. What M2 builds, in order
 
 Each step is usable and measurable on its own, which is what keeps the phase from being one
