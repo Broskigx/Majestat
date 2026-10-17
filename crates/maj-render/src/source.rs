@@ -872,10 +872,13 @@ pub trait PictureResolver: fmt::Debug {
     /// decision cannot drift apart. A free function next to the trait could, and did.
     ///
     /// It may cost a stat — knowing whether a file is there is the difference between
-    /// `"png"` and `"offline"` — but never a decode. One residual gap is documented rather
-    /// than hidden: a file that is present but damaged is named for its container here and
-    /// comes back as a placeholder from [`PictureResolver::resolve`], because telling those
-    /// apart means reading it.
+    /// `"png"` and `"offline"` — but never a decode.
+    ///
+    /// [`WorkspaceResolver`] has one residual gap, documented rather than hidden: a file that
+    /// is present but damaged is named for its container here and comes back as a placeholder
+    /// from [`PictureResolver::resolve`], because telling those apart means reading it, and
+    /// this resolver has no prober in it. [`crate::MediaResolver`] closes it — a cached probe
+    /// reads headers, which is not a decode, so it answers `damaged` honestly.
     fn kind(&self, uri: &str) -> &'static str;
 }
 
@@ -965,6 +968,17 @@ impl WorkspaceResolver {
         Self { missing, ..self }
     }
 
+    /// The transfer function this resolver reads files with, where it was declared.
+    ///
+    /// `None` means [`DEFAULT_TRANSFER`] is assumed. Exposed because the media adapter reads
+    /// stills itself — it knows from a probe *what* a file is, where this resolver only knows
+    /// what its name claims — and it has to read them with the same declared curve, or two
+    /// paths to one file would produce two pictures.
+    #[must_use]
+    pub const fn transfer(&self) -> Option<TransferFunction> {
+        self.transfer
+    }
+
     /// What this resolver does about media it cannot read.
     #[must_use]
     pub const fn missing_media(&self) -> MissingMedia {
@@ -1008,8 +1022,11 @@ impl WorkspaceResolver {
     }
 }
 
-/// The path part of a URI, for the two containers that are read off disk.
-fn file_path(uri: &str) -> &str {
+/// The path part of a URI, for the containers that are read off disk.
+///
+/// `pub(crate)` so the media adapter resolves a URI to a path exactly as the still readers
+/// do: two spellings of this would be two answers about where a file is.
+pub(crate) fn file_path(uri: &str) -> &str {
     uri.strip_prefix("file://").unwrap_or(uri)
 }
 

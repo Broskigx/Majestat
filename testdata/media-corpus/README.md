@@ -32,6 +32,30 @@ carry no third-party terms, and their expected decode output is known exactly. R
 generation command next to the file. For the cases synthesis cannot reach — camera RAW,
 genuinely damaged media — record the source and its licence in a manifest beside the file.
 
+## The synthetic part of it, which exists (M2a)
+
+Thirty-nine of those files are generated, by a committed generator, into the git-ignored
+`media/` directory beside this file:
+
+```sh
+cargo run -p maj-media --example make-corpus
+```
+
+Every byte is written by `maj_media::corpus`, which also states, next to each file, the
+command that regenerates it alone and the reading a probe of it must produce — so the gate
+compares a probe against a declaration rather than against a second opinion. A manifest with
+that table is written beside the files. `cargo test -p maj-media --test corpus` writes the
+whole corpus to a temporary directory and probes it on every run, so the measurement does
+not depend on anyone having run the generator.
+
+**Thirty-nine files is not the hundred this gate asks for**, and a synthetic corpus cannot
+retire the real one: every file's sample data is filler rather than a coded picture, so no
+codec's bitstream is exercised past the parameter set that states chroma and depth. What is
+still missing is listed in code, in `corpus::NOT_COVERED`, and printed by the generator:
+coded pictures, real codecs, camera RAW, real HDR and log footage, MXF, genuinely damaged
+media, image sequences, and surround mixing. Those need real files, with their provenance
+recorded here as this README already requires.
+
 ## Expectations
 
 Bugs found in the corpus become permanent regression cases. A file that once crashed the

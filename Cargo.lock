@@ -218,6 +218,7 @@ dependencies = [
  "maj-color",
  "maj-core",
  "maj-graph",
+ "maj-media",
  "maj-playback",
  "maj-time",
  "miniz_oxide",
